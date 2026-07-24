@@ -94,10 +94,18 @@ def _make_hat_and_sm_class(role: str):
 
 
 # ─── PDU ペイロードのエンコード/デコード ────────────────────────────────────
-# calibrated/start/stop/detected はトリガーのみ（受信そのものが意味を持つ）なので
-# 1 バイトのダミーペイロードで済ませる。scan だけ実データを積む。
-
-_TRIGGER_PAYLOAD = b"\x00"
+# calibrated/start/stop/detected はトリガーのみ（受信そのものが意味を持つ）。
+#
+# 【自己ループバック対策】
+# Zenoh の z_declare_subscriber はデフォルト(zc_locality_t::ZC_LOCALITY_ANY)で
+# 自分自身が publish したデータも受信する。hakoniwa-pdu-endpoint は endpoint
+# ごとに単一の subscriber を宣言する実装のため、これを ZC_LOCALITY_REMOTE に
+# 変更して自己echoを止めると *その endpoint の全チャンネル* が一律に影響を
+# 受けてしまい、「このイベントだけは自分の発行を自分でも拾いたい」という
+# 将来の使い方ができなくなる。そのため hakoniwa-pdu-endpoint 側は変更せず、
+# トリガーのペイロードに送信元識別子（役割）を積み、受信側で自分自身の
+# 識別子と一致するものは無視するアプリケーションレベルの対策にした。
+_ORIGIN = {"real": b"\x01", "sim": b"\x02"}
 _SCAN_STRUCT = struct.Struct("<idi")  # angle(int32), dome_angle(float64), distance_mm(int32)
 _MISSING_INT = -2_147_483_648  # angle / distance_mm が None のときの番兵値
 
@@ -145,16 +153,20 @@ def main() -> None:
     endpoint.start()
     endpoint.post_start()
 
+    my_origin = _ORIGIN[args.role]
+
     def on_event(name: str, payload: dict) -> None:
         """SonarRadarSM からの送信フック（tick ループと同じスレッドで同期的に呼ばれる）。"""
-        data = _encode_scan(payload) if name == "scan" else _TRIGGER_PAYLOAD
+        data = _encode_scan(payload) if name == "scan" else my_origin
         endpoint.send_by_name(PduKey(robot=args.robot, pdu=name), data)
 
     sm_holder: list = []  # 受信コールバックから SonarRadarSM 本体を参照するための入れ物
                            # （SonarRadarSM 生成前に購読登録する必要があるため）
 
     def _subscribe(pdu_name: str, on_recv) -> None:
-        def _cb(_key, _payload: bytes) -> None:
+        def _cb(_key, recv_payload: bytes) -> None:
+            if recv_payload == my_origin:
+                return  # 自己ループバック（Zenohセッションローカル配送）を無視
             on_recv()
         endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=args.robot, pdu=pdu_name), _cb)
 
