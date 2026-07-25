@@ -4,6 +4,8 @@
 
 sonar_radar 本体は「実機・スタンドアロンSIM・Hakoniwa SIM」という3つの環境をデジタルツインとして共存させる設計だが、本リポジトリはそれとは別レイヤーの実験として、**ネットワーク越しに複数マシン上で動く実機とシミュレータを、start/stop/calibrate等のイベント単位で疎結合に同期させる**ことを目的とする。
 
+> **設計の転回（進行中）**: 当初は `sonar_radar` 本体に手を入れる形で実装していたが、実装・実機検証を通じて設計上の問題が判明し、**`sonar_radar` は完全に無改造のまま使わず、本リポジトリ側に独立した「Zenoh版 sonar_radar」ステートマシンを新設する**方針に転回した。経緯と現在の状態機械設計は [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) を参照。このREADMEの一部セクションは転回前の内容のままなので、矛盾する記述は設計ドキュメント側を正とする。
+
 ## 背景
 
 Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単一ホスト内の複数アセットを密結合に同期させる仕組みで、今回のようにマシンをまたいだ「実機とシムがだいたい同じタイミングで動きつつ、イベント発生時だけ通信する」というユースケースには直接使えない。かわりに、各マシンが自律的にステートマシンの tick ループ（既存の「開いたループ」設計そのまま）を回しつつ、要所で Zenoh 経由の PDU を送受信することで疎結合な同期を実現する。
@@ -31,7 +33,9 @@ Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単
 | `radar/detector/detected` | マーカー検出→方向反転 | 実機 or シムの marker_detector | 相手側、ブリッジ（モニタ） |
 | `radar/scanner/scan` | スキャンデータ（angle, dome_angle, distance_mm） | 実機・シム双方の scanner | ブリッジ（→ROSトピック送出） |
 
-## sonar_radar 本体側で必要な変更
+## 【廃案】sonar_radar 本体側で必要な変更
+
+> **この節は転回前の設計であり、現在は採用していない。** 経緯は上記「設計の転回」および [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の「背景」を参照。実際にコミット `038ed15` として実装・実機検証まで行ったが、(1) Zenohの自己ループバック、(2) 起動順序に依存する取りこぼし、(3) ローカルクリックだけ特別扱いする非対称設計、という3つの問題が見つかり、`sonar_radar` 本体は元に戻す（revert）ことにした。**revert 自体はまだ実行していない**（2026-07-24時点、`sonar_radar` はまだコミット `038ed15` のまま）。以下は記録として残す。
 
 コアの `SonarRadarSM`（`sonar_radar` リポジトリ側）に、以下の小さな変更を加える必要がある。既存の「1状態=1つの待つできごと」というフラットなステートマシン設計方針に従う。
 
@@ -57,6 +61,8 @@ INIT → CALIB_TO_ZERO → CALIB_TO_OFFSET → WAIT_FOR_PEER_CALIBRATED → WAIT
 ```
 sonar_radar-zenoh-bridge/
 ├── README.md
+├── docs/
+│   └── zenoh_state_machine_design.md  # 設計転回後の状態機械設計（進行中）
 ├── pdu/
 │   ├── pdudef.json           # robot_name="Radar" で pdutypes.json を参照
 │   └── pdutypes.json         # channel 0-5（calibrate/calibrated/start/stop/detected/scan）
@@ -64,14 +70,17 @@ sonar_radar-zenoh-bridge/
 │   ├── mac/                  # シム側 endpoint 設定。zenohd はMac自身がローカル(127.0.0.1)で稼働する前提
 │   │   ├── endpoint_zenoh.json
 │   │   ├── cache/buffer.json
-│   │   └── comm/{zenoh_pubsub_comm.json, zenoh/client.json5}
+│   │   ├── comm/{zenoh_pubsub_comm.json, zenoh/client.json5}
+│   │   └── zenohd/router.json5   # zenohd自体の起動設定（REST + memory storage付き）
 │   └── raspi4b/               # 実機側 endpoint 設定。zenoh/client.json5 が Mac の LAN IP へ接続
 │       ├── endpoint_zenoh.json
 │       ├── cache/buffer.json
 │       └── comm/{zenoh_pubsub_comm.json, zenoh/client.json5}
 └── driver/
-    └── sonar_radar_zenoh.py   # sonar_radar の SonarRadarSM に endpoint を差し込むドライバ
-                                 # （sim/sonar_radar_ctrl_hako.py の zenoh 版に相当）
+    └── sonar_radar_zenoh.py   # 【要全面書き直し】現状は sonar_radar の SonarRadarSM を
+                                 # import して on_event/notify_*() で配線する実装だが、
+                                 # 設計転回後は sonar_radar に依存しない独立した
+                                 # ステートマシンとして書き直す予定
 ```
 
 `config/raspi5/`（`hakoniwa-pdu-ros` bridge 用設定）は未着手。
@@ -122,17 +131,24 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 ## 依存リポジトリ
 
-- [sonar_radar](https://github.com/kuboaki/sonar_radar) — `SonarRadarSM` 本体。`raspi/sonar_radar.py`に`WAIT_FOR_PEER_CALIBRATED`状態と`on_event`/`notify_*()`フックを追加済み（コミット`038ed15`、Mac/実機Pi4B+双方にpull・動作確認済み）
+- [sonar_radar](https://github.com/kuboaki/sonar_radar) — 参考にする既存のドメインロジック（キャリブレーション・starter・スキャン）だが、**本リポジトリはこれをimportせず無改造のまま扱わない**。`raspi/sonar_radar.py`には過去の設計転回前の変更（`WAIT_FOR_PEER_CALIBRATED`状態、`on_event`/`notify_*()`フック、コミット`038ed15`）が現在も残っているが、これは近日中にrevertする予定
 - [hakoniwa-pdu-endpoint](https://github.com/hakoniwalab/hakoniwa-pdu-endpoint) — Zenoh 経由の PDU 通信ライブラリ
 - [hakoniwa-pdu-ros](https://github.com/hakoniwalab/hakoniwa-pdu-ros) — PDU⇄ROSトピック ブリッジ
 
 ## 残作業・次のステップ
 
-1. Mac上でzenohd（ルーター）を起動する設定を用意し、`driver/sonar_radar_zenoh.py --role sim`を実際に動かして単体確認
-2. Raspberry Pi 4B+ (`192.168.1.62`) に`hakoniwa-pdu-endpoint`をビルド・インストール（Mac向け手順のarm64/Linux版、Raspberry Pi OS Bookworm。別トライアルのRaspi5(Ubuntu)向け手順とほぼ同じはずだが要検証）
-3. 実機・シム間の疎通確認（calibrated待ち合わせ、start/stop、detected方向反転、scanデータ）
-4. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認
+**設計継続（優先）**
+
+1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`相当、`SCANNING`、`detected`の対称設計、参加者コンフィグの形式、hatの受け取り方など未確定事項が複数残っている）
+
+**設計確定後の実装作業**
+
+2. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
+3. `driver/sonar_radar_zenoh.py` を新しい状態機械設計に基づいて全面的に書き直す
+4. Raspberry Pi 4B+ (`192.168.1.62`) に`hakoniwa-pdu-endpoint`をビルド・インストール（**これは設計に依存せず先行して完了済み**、`build-zenoh-shared/`を再利用し`.local`へインストール・スモークテスト成功）
+5. 実機・シム間の疎通確認（新設計に基づくcalibrated待ち合わせ・タイムアウト、start/stop、detected方向反転、scanデータ）
+6. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認
 
 ## ステータス
 
-設計整理は完了。実装は一部進行中（PDU定義・config・ドライバスクリプトの雛形、Mac側pdu-endpoint環境構築まで完了）。実際のマシン間疎通確認はこれから。
+設計転回中。旧設計（sonar_radar本体への変更）は実装・実機検証まで完了していたが、発見された問題により方針転換し、新しい独立ステートマシンの設計を進めている。PDU定義・zenoh設定・Mac/実機のpdu-endpoint環境構築（インフラ部分）は転回の影響を受けず完了済み。ドライバスクリプトの実装は新設計確定後に着手する。
