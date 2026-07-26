@@ -2,7 +2,7 @@
 
 実機・シミュレータ・ブリッジをZenoh経由で同期させるための、独立したステートマシン「Zenoh版 sonar_radar」の設計ドキュメント。
 
-状態機械図・クラス図の正本はAstahプロジェクト [`docs/sonar_radar_zenoh_bridge.asta`](sonar_radar_zenoh_bridge.asta) にある。このMarkdownは、その設計に至った経緯と、現時点の設計内容・未決事項をテキストで追えるようにするための副読資料。
+状態機械図・クラス図の正本はAstahプロジェクト [`docs/sonar_radar_zenoh_bridge.asta`](sonar_radar_zenoh_bridge.asta) にある。図はAstahのエクスポート機能で `docs/diagrams/` 配下に構造ツリーと同じ階層で書き出し、このMarkdownからはその画像を参照する。図を更新したら同じパスへ再エクスポートするだけでよく、本文側のリンク修正や画像差し替えは不要。このMarkdownは、その設計に至った経緯と、現時点の設計内容・未決事項をテキストで追えるようにするための副読資料。
 
 ## 背景: 設計の転回
 
@@ -42,6 +42,8 @@
 - **`sonar_radar_sim`**（シミュレータ）: `sonar_radar` の別実装ではなく、内部で `sonar_radar` を使ってシミュレータの動作を担う。`libspikehat_sim` は `libspikehat.h` と同じインターフェースを持つシム用実装。
 - **`pdu_ros_bridge`**（ブリッジ/監視役、Raspberry Pi 5想定）: `sonar_radar_ros_bridge` はまだスタブで詳細未設計。
 
+![クラス図](diagrams/sonar_radar_zenoh_bridgeのクラス図.png)
+
 3サブシステムはいずれも **`broker`** クラスに依存する。`broker` はPDUのpublish/受信を担う抽象層で、名前はZenoh/MQTT等の実装を差し替え可能な抽象名として「broker」のままとし、実体は `hakoniwa_pdu_endpoint.c_endpoint.Endpoint` をラップしたものになる想定。
 
 `broker` のAPI（現時点の一次案）:
@@ -54,85 +56,7 @@
 
 State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRadarSM`。以下、正本はAstahの `sonar_radar::runのステートマシン図`。
 
-```mermaid
-stateDiagram-v2
-    [*] --> INIT
-    INIT --> WAIT_CALIBRATED
-    note right of INIT
-        entry: 初期化処理
-        （calibration_participants取得、timer_create等）
-    end note
-
-    WAIT_CALIBRATED --> WAIT_FOR_START_PRESS: radar/dome/calibratedを受信した\n[guard: check_calibration_participants()]
-    WAIT_CALIBRATED --> CALIBRATION_FAILED: timer_is_fired()
-    note right of WAIT_CALIBRATED
-        entry: radar/dome/calibrate を publish、timer_start(5s)
-        exit: timer_stop()
-        guard偽（未充足）の場合は暗黙の自己ループ
-    end note
-
-    CALIBRATION_FAILED --> TERMINATED
-    note right of CALIBRATION_FAILED
-        entry: キャリブレーション失敗を通知
-        （失敗時の具体的な処理は未定）
-    end note
-
-    WAIT_FOR_START_PRESS --> WAIT_FOR_START_RELEASE: starter_is_pushed()\n[is_leader == true]
-    WAIT_FOR_START_PRESS --> SCANNING: radar/starter/startを受信した
-
-    WAIT_FOR_START_RELEASE --> WAIT_FOR_SCAN_START: !starter_is_pushed()
-
-    WAIT_FOR_SCAN_START --> SCANNING: radar/starter/startを受信した
-    WAIT_FOR_SCAN_START --> SCAN_FAILED: timer_is_fired()
-    note right of WAIT_FOR_SCAN_START
-        entry: radar/starter/start を publish、timer_start(2s)
-        exit: timer_stop()
-    end note
-
-    SCANNING --> TERMINATED: radar/starter/stopを受信した
-    SCANNING --> WAIT_FOR_STOP_PRESS: starter_is_pushed()\n[is_leader == true]
-    SCANNING --> MARKER_DETECTED: marker_detector_is_detected()\n[is_leader == true]
-    SCANNING --> SCAN_FAILED: timer_is_fired()
-    SCANNING --> WAIT_FOR_INVERT: radar/detector/detectedを受信した
-    note right of SCANNING
-        do: scanner_get_distance() / radar/scanner/scanをpublish
-        （ステートマシンの周期を周期として間欠的にスキャン）
-        timer_is_fired()の起動元は未確定（要検討）
-    end note
-
-    MARKER_DETECTED --> WAIT_FOR_INVERT: radar/detector/detectedを受信した
-    MARKER_DETECTED --> SCAN_FAILED: timer_is_fired()
-    note right of MARKER_DETECTED
-        entry: radar/detector/detected を publish、timer_start(2s)
-        exit: timer_stop()
-    end note
-
-    WAIT_FOR_INVERT --> SCANNING
-    note right of WAIT_FOR_INVERT
-        entry: radar_base_invert_direction()
-    end note
-
-    WAIT_FOR_STOP_PRESS --> WAIT_FOR_STOP_RELEASE: !starter_is_pushed()
-
-    WAIT_FOR_STOP_RELEASE --> TERMINATED: radar/starter/stopを受信した
-    note right of WAIT_FOR_STOP_RELEASE
-        entry: radar/starter/stop を publish、timer_start(2s)
-        exit: timer_stop()
-    end note
-
-    SCAN_FAILED --> WAIT_FOR_STOP_RELEASE
-    note right of SCAN_FAILED
-        entry: スキャン失敗を通知 / radar/starter/stopをpublish
-        （失敗時の具体的な処理は未定）
-    end note
-
-    TERMINATED --> [*]
-    note right of TERMINATED
-        entry: 終了処理（timer_destroy等）
-        全経路共有のentryアクションのみ実行
-        （成功経路・失敗経路どちらからも到達する）
-    end note
-```
+![ステートマシン図](diagrams/sonar_radar/app/sonar_radar/run/sonar_radar__runのステートマシン図.png)
 
 補足:
 
