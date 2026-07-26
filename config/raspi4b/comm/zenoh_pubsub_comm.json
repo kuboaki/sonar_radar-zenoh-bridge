@@ -15,7 +15,8 @@
             { "name": "start",      "notify_on_recv": true },
             { "name": "stop",       "notify_on_recv": true },
             { "name": "detected",   "notify_on_recv": true },
-            { "name": "scan",       "notify_on_recv": true }
+            { "name": "scan",       "notify_on_recv": true },
+            { "name": "state",      "notify_on_recv": true }
           ]
         }
       ]

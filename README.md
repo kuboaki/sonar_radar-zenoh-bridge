@@ -76,11 +76,16 @@ sonar_radar-zenoh-bridge/
 │       ├── endpoint_zenoh.json
 │       ├── cache/buffer.json
 │       └── comm/{zenoh_pubsub_comm.json, zenoh/client.json5}
+├── bridge/                    # 新設計に基づく実装(状態機械図を1状態ずつ実装しながら進める)
+│   ├── spikehat_timer.py      # ワンショットタイマー(C移植を見据えた関数シグネチャ)
+│   ├── broker.py              # PDU publish/受信を担う抽象層(hakoniwa_pdu_endpoint.Endpointのラップ)
+│   ├── sonar_radar_app.py     # ステートマシン本体。実装済み: INIT/WAIT_CALIBRATED/
+│   │                          # CALIBRATION_FAILED/TERMINATED、WAIT_FOR_START_PRESSへの到達まで
+│   └── run_calibration_smoke_test.py  # 上記を実際のZenoh経由で動作確認するスクリプト
 └── driver/
-    └── sonar_radar_zenoh.py   # 【要全面書き直し】現状は sonar_radar の SonarRadarSM を
-                                 # import して on_event/notify_*() で配線する実装だが、
-                                 # 設計転回後は sonar_radar に依存しない独立した
-                                 # ステートマシンとして書き直す予定
+    └── sonar_radar_zenoh.py   # 【旧, 使わない】sonar_radar の SonarRadarSM を import して
+                                 # on_event/notify_*() で配線する転回前の実装。bridge/ に
+                                 # 置き換わっていく
 ```
 
 `config/raspi5/`（`hakoniwa-pdu-ros` bridge 用設定）は未着手。
@@ -127,7 +132,38 @@ HAKO_PDU_ENDPOINT_SHARED_LIB=$HOME/.local/lib/hakoniwa-pdu-endpoint/python/hakon
 python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 ```
 
-`driver/sonar_radar_zenoh.py`自体の実行はまだ未検証（zenohd起動・実機側環境構築が残っているため）。
+`driver/sonar_radar_zenoh.py`（旧実装）自体の実行は未検証・今後使わない。かわりに`bridge/`配下の新実装は以下の手順で動作確認できる。
+
+### `bridge/` の動作確認（キャリブレーション部分、動作確認済み）
+
+1. zenohdルーターを起動する（`config/mac/zenohd/router.json5`を使用。既に起動中なら不要）。
+
+   ```bash
+   cd ~/Projects/sonar_radar-zenoh-bridge/config/mac/zenohd
+   zenohd -c router.json5
+   ```
+
+2. 別ターミナルで、状態遷移を監視するwatchスクリプトを起動しておく（推奨。任意のタイミングで起動・終了してよい）。
+
+   ```bash
+   cd ~/Projects/sonar_radar-zenoh-bridge/bridge
+   source env.sh
+   source ~/Projects/sonar_radar/.venv/bin/activate
+   python3 watch_state.py
+   ```
+
+3. さらに別ターミナルで、キャリブレーション部分のスモークテストを実行する。
+
+   ```bash
+   cd ~/Projects/sonar_radar-zenoh-bridge/bridge
+   source env.sh
+   source ~/Projects/sonar_radar/.venv/bin/activate
+   python3 run_calibration_smoke_test.py
+   ```
+
+   `watch_state.py`側のターミナルに `state -> WAIT_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
+
+`bridge/env.sh`は`hakoniwa_pdu_endpoint`用の環境変数(`PYTHONPATH`等)をまとめたもの。Pythonの実行環境自体は`sonar_radar/.venv`（Python 3.12, cffi対応）を流用している。
 
 ## 依存リポジトリ
 
@@ -141,13 +177,15 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`相当、`SCANNING`、`detected`の対称設計、参加者コンフィグの形式、hatの受け取り方など未確定事項が複数残っている）
 
-**設計確定後の実装作業**
+**実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中）**
 
-2. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
-3. `driver/sonar_radar_zenoh.py` を新しい状態機械設計に基づいて全面的に書き直す
-4. Raspberry Pi 4B+ (`192.168.1.62`) に`hakoniwa-pdu-endpoint`をビルド・インストール（**これは設計に依存せず先行して完了済み**、`build-zenoh-shared/`を再利用し`.local`へインストール・スモークテスト成功）
-5. 実機・シム間の疎通確認（新設計に基づくcalibrated待ち合わせ・タイムアウト、start/stop、detected方向反転、scanデータ）
-6. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認
+2. [x] `bridge/` パッケージを新設。`INIT → WAIT_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(`bridge/run_calibration_smoke_test.py`)。
+   - `calibrate`受信→`calibrated`publishという「キャリブレーション処理」自体はステートマシン上まだ未設計のため、`Broker.consume_calibrate_received()`(designed APIには無い追加メソッド)を使った最小スタブで代替している。正式に状態機械へ組み込む際に見直すこと。
+3. 次のマイルストーン: `WAIT_FOR_START_PRESS` 以降（押下/解放、`SCANNING`、`detected`対称処理等）を同様に1状態ずつ実装
+4. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
+5. Raspberry Pi 4B+ (`192.168.1.62`) に`hakoniwa-pdu-endpoint`をビルド・インストール（**これは設計に依存せず先行して完了済み**、`build-zenoh-shared/`を再利用し`.local`へインストール・スモークテスト成功）
+6. 実機・シム間の疎通確認（2台以上でのcalibrated待ち合わせ・タイムアウト、start/stop、detected方向反転、scanデータ）
+7. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認
 
 ## ステータス
 
