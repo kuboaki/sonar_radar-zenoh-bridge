@@ -1,10 +1,12 @@
 {
-  // Mac (zenohd) の現在のLAN IP。DHCP環境では変わりうるので、
-  // 接続できない場合はまずここを疑うこと。
+  // Mac (zenohd) への接続先。IPではなくmDNS(.local)名を使うことで、
+  // ネットワークが変わってIPが変化しても書き換え不要になるか実験中。
+  // mDNSが通らない環境では接続できないので、その場合はIPに戻すこと
+  // (例: "tcp/192.168.1.195:7447")。
   mode: "client",
   connect: {
     endpoints: [
-      "tcp/192.168.1.195:7447"
+      "tcp/Shin-MacBookAir-15.local:7447"
     ]
   }
 }
