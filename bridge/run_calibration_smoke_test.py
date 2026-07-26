@@ -3,9 +3,12 @@
 
 INIT → WAIT_CALIBRATED → WAIT_FOR_START_PRESS (または → CALIBRATION_FAILED
 → TERMINATED) を、実際のZenoh(hakoniwa-pdu-endpoint)経由のpublish/受信で
-確認する。1プロセス・1ノード構成(calibration_participants = {自分の
-origin} のみ)で、自分のpublishを自分で受信するループバック経路を
-使って検証する。
+確認する。
+
+デフォルトは1プロセス・1ノード構成(calibration_participants = {自分の
+origin} のみ)で、自分のpublishを自分で受信するループバック経路を使って
+検証する。--origin/--participants/--config を指定すれば、実機・シムなど
+複数マシンにまたがる構成でも同じスクリプトを使って検証できる。
 
 事前にzenohdが起動していること(config/mac/zenohd/router.json5 を使い、
 tcp/0.0.0.0:7447 で待ち受け)。
@@ -19,6 +22,7 @@ tcp/0.0.0.0:7447 で待ち受け)。
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import time
@@ -28,30 +32,57 @@ from sonar_radar_app import SonarRadarApp, State
 from state_reporter import with_state_change_reporting
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_CONFIG_PATH = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.json")
+_DEFAULT_CONFIG = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.json")
 
-_MY_ORIGIN = 1
 _OVERALL_TIMEOUT_SEC = 10.0
 _TICK_INTERVAL_SEC = 0.05
 
 
+def _parse_participants(text: str) -> set:
+    return {int(v) for v in text.split(",") if v.strip()}
+
+
 def main() -> int:
-    broker = Broker("sonar_radar_zenoh_bridge_smoketest", _MY_ORIGIN)
-    broker.open(_CONFIG_PATH)
+    parser = argparse.ArgumentParser(description="キャリブレーション部分の動作確認スクリプト")
+    parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
+    parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
+    parser.add_argument(
+        "--participants",
+        default=None,
+        help="calibration_participantsのカンマ区切り(例: 1,2)。省略時は自分のoriginのみ",
+    )
+    parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
+    parser.add_argument(
+        "--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数"
+    )
+    args = parser.parse_args()
+
+    participants = (
+        _parse_participants(args.participants) if args.participants else {args.origin}
+    )
+
+    broker = Broker(f"sonar_radar_zenoh_bridge_smoketest_{args.origin}", args.origin)
+    broker.open(args.config)
 
     app = SonarRadarApp(
         broker=broker,
-        calibration_participants={_MY_ORIGIN},
-        is_leader=True,
+        calibration_participants=participants,
+        is_leader=args.leader,
     )
+
     def _report(state: State) -> None:
         print(f"[smoke-test] state -> {state.value}")
         broker.publish_state(state.value)
 
     with_state_change_reporting(app, _report)
 
-    deadline = time.monotonic() + _OVERALL_TIMEOUT_SEC
+    deadline = time.monotonic() + args.timeout
     reached_states = {State.WAIT_FOR_START_PRESS, State.TERMINATED}
+
+    print(
+        f"[smoke-test] origin={args.origin} participants={sorted(participants)} "
+        f"leader={args.leader} config={args.config}"
+    )
 
     try:
         while time.monotonic() < deadline:
