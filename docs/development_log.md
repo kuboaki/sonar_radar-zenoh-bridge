@@ -32,6 +32,28 @@
 3. **環境差は、実装者本人が手元で再現して初めて見つかる場合がある。**
    macOSの `DYLD_LIBRARY_PATH` に `/usr/local/hakoniwa/lib`(以前の `sudo bash install.bash` で作られた、Zenoh無効の古いビルドが残っている場所)が含まれる環境だと、`HAKO_PDU_ENDPOINT_SHARED_LIB` で絶対パス指定していても、dyldが同名ファイルをそちらから優先して読み込んでしまう問題があった。この問題は作業環境(Bashツール側のシェル)では再現せず、ユーザー本人が実際に手元のターミナルで試して初めて発覚した。対処は `bridge/env.sh` で `.local` 側のパスを `DYLD_LIBRARY_PATH` の先頭に追加すること(共有のシステム領域 `/usr/local/hakoniwa/lib` 自体は変更しない)。
 
+### 実機(Raspberry Pi 4B+) + Mac、2台構成での検証(完了・大きな進展)
+
+単一プロセスの自己ループバックだけでは、`calibration_participants` が実質1個(自分自身)しかなく、「複数の異なるoriginが揃うのを待つ」というguardロジックの本質、すなわち前回の設計転回のきっかけになった問題そのものが検証できていなかった。そこで、マイルストーン1の範囲(キャリブレーションのみ)を、実機 `192.168.1.62` とMacの実ネットワーク越し2台構成で検証した。ブリッジ役(Raspberry Pi 5, `192.168.1.4`)は今回のスコープでは不要と判断し、対象から外した。
+
+**事前調査でわかったこと**
+
+- 実機の `hakoniwa-pdu-endpoint` はZenoh有効でビルド・インストール済み(問題なし)
+- 実機の `sonar_radar-zenoh-bridge` は設計転回前の古いコミットのままだった(`git pull`で解消)
+- ブリッジ機(Pi 5)には `sonar_radar-zenoh-bridge` が一度もクローンされていない、`config/raspi5` もまだ存在しない(想定通り、未着手)
+- 実機からMacのzenohd(`192.168.1.195:7447`)へのTCP疎通は問題なし
+
+**対応した変更**
+
+- `run_calibration_smoke_test.py` に `--origin`/`--participants`/`--leader`/`--config` を追加し、同じスクリプトを異なるマシン・役割で使えるようにした(引数省略時は従来の単体検証のまま)
+- `bridge/env.sh` を `uname -s` で分岐させ、macOS(`.dylib`/`DYLD_LIBRARY_PATH`)とLinux(`.so`/`LD_LIBRARY_PATH`)の両方に対応させた
+
+**結果**
+
+実機(origin=2, leader)とMac(origin=1, follower)を `calibration_participants={1,2}` でほぼ同時に起動したところ、双方が相手の `calibrated` を実ネットワーク越しに受信し、guardが揃って通過、ほぼ同時に `WAIT_FOR_START_PRESS` に到達した(実機 17:53:31.229 / Mac 17:53:31.279)。`watch_state.py` でも両machineの状態遷移をリアルタイムに観測できた。
+
+**教訓**: 「1台でとりあえず動く」ことと「複数ノードで協調できる」ことの間には、設計上いちばん重要な部分(このプロジェクトの存在理由そのもの)が隠れていることがある。単体検証で満足せず、早い段階で小さいスコープのまま実環境の複数ノードに広げて検証したことで、今回はその部分を安く・早く実証できた。
+
 ## 次のマイルストーン
 
 `WAIT_FOR_START_PRESS` 以降(押下/解放、`SCANNING`、`detected`の対称処理等)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
