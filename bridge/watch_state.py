@@ -20,6 +20,7 @@ import os
 import sys
 import time
 
+from console_report import console_report
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,7 +41,7 @@ def main() -> int:
     def _on_recv(_key, payload: bytes) -> None:
         state_name = payload.rstrip(b"\x00").decode("utf-8", errors="replace")
         now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"[{now}] state -> {state_name}", flush=True)
+        console_report(state_name, prefix=now)
 
     endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="state"), _on_recv)
 

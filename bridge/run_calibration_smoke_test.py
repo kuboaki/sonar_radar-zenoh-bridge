@@ -28,6 +28,7 @@ import sys
 import time
 
 from broker import Broker
+from console_report import console_report
 from sonar_radar_app import SonarRadarApp, State
 from state_reporter import with_state_change_reporting
 
@@ -71,7 +72,7 @@ def main() -> int:
     )
 
     def _report(state: State) -> None:
-        print(f"[smoke-test] state -> {state.value}")
+        console_report(state.value, prefix="smoke-test")
         broker.publish_state(state.value)
 
     with_state_change_reporting(app, _report)
