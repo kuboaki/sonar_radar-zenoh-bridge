@@ -62,7 +62,8 @@ INIT → CALIB_TO_ZERO → CALIB_TO_OFFSET → WAIT_FOR_PEER_CALIBRATED → WAIT
 sonar_radar-zenoh-bridge/
 ├── README.md
 ├── docs/
-│   └── zenoh_state_machine_design.md  # 設計転回後の状態機械設計（進行中）
+│   ├── zenoh_state_machine_design.md  # 設計転回後の状態機械設計（進行中）
+│   └── development_log.md             # 「テストによる段階的な開発」の進め方と教訓の記録
 ├── pdu/
 │   ├── pdudef.json           # robot_name="Radar" で pdutypes.json を参照
 │   └── pdutypes.json         # channel 0-5（calibrate/calibrated/start/stop/detected/scan）
@@ -177,7 +178,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`相当、`SCANNING`、`detected`の対称設計、参加者コンフィグの形式、hatの受け取り方など未確定事項が複数残っている）
 
-**実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中）**
+**実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中。進め方と教訓は[`docs/development_log.md`](docs/development_log.md)を参照）**
 
 2. [x] `bridge/` パッケージを新設。`INIT → WAIT_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(`bridge/run_calibration_smoke_test.py`)。
    - `calibrate`受信→`calibrated`publishという「キャリブレーション処理」自体はステートマシン上まだ未設計のため、`Broker.consume_calibrate_received()`(designed APIには無い追加メソッド)を使った最小スタブで代替している。正式に状態機械へ組み込む際に見直すこと。
