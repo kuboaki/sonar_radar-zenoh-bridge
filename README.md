@@ -184,9 +184,10 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    - `calibrate`受信→`calibrated`publishという「キャリブレーション処理」自体はステートマシン上まだ未設計のため、`Broker.consume_calibrate_received()`(designed APIには無い追加メソッド)を使った最小スタブで代替している。正式に状態機械へ組み込む際に見直すこと。
 3. [x] 実機Raspberry Pi 4B+とMacの2台構成で、キャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 4. [x] `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`（到達まで）を実装し、実機Raspberry Pi 4B+とMacの2台構成（デモ会場用の別ルーター経由）でstart協調動作を確認済み(`bridge/run_start_smoke_test.py`)。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
-5. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
-6. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
-7. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+5. [x] `bridge/real_starter.py`(`RealStarter`)を新設し、擬似スイッチではなく実機のフォースセンサー(libspikehat)を直接使う`--real-starter`オプションを追加。実際に実機の物理ボタンを押して、実機・Macとも`SCANNING`まで到達することを確認済み。Build HATには準備完了を問い合わせるAPIが無いため、実際にセンサーが読めるようになるまでポーリングして待つ仕組みを実装した。
+6. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
+7. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
+8. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
 
 ## ステータス
 
