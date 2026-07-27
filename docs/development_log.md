@@ -83,6 +83,19 @@
 
 **運用メモ**: 当初は `client.json5` を直接編集してIPを書き換えていたが、「編集は事故りやすい」との指摘を受け、`client.home.json5`(自宅用)・`client.demo.json5`(デモ会場用)をあらかじめ両方用意しておき、使う方を `client.json5` にコピーする運用に変更した(`cp client.demo.json5 client.json5` のように)。この方式だと、ディレクトリのファイル一覧を見ただけで「ネットワーク切り替えが必要な設定がある」こと自体に気づける、という副次的な利点もある。現在は `client.demo.json5` の内容が `client.json5` に反映されている(デモ会場設定が有効)。
 
-## 次のマイルストーン
+## マイルストーン2: WAIT_FOR_START_PRESS 〜 SCANNING到達 (完了)
 
-`WAIT_FOR_START_PRESS` 以降(押下/解放、`SCANNING`、`detected`の対称処理等)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
+### 実装したもの
+
+`sonar_radar_app.py` に `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`(到達まで)を追加。`bridge/run_start_smoke_test.py` を新設。
+
+実ハードウェア(`starter`/`marker_detector`/`radar_base`/`scanner`)はまだこの層に接続されていないため、`SonarRadarApp` のコンストラクタで関数を注入できるようにした(未指定時はfalse/no-op/0を返す安全なスタブ)。テストでは `starter_is_pushed` をタイマー駆動の擬似スイッチ(`_FakeStarter`、一定時間後に押下、さらに一定時間後に解放を模擬)で代替した。
+
+### 確認した内容
+
+- 単体(自己ループバック): leader役で `WAIT_FOR_START_PRESS`(擬似押下)→`WAIT_FOR_START_RELEASE`(擬似解放)→`WAIT_FOR_SCAN_START`(start publish)→(自己受信)→`SCANNING` まで到達
+- 実機(follower)+Mac(leader)、新ルーター(`192.168.11.0/24`)経由の2台構成: 双方が `WAIT_CALIBRATED`→`WAIT_FOR_START_PRESS` まで揃った後、Macがローカルで擬似押下→解放→`start`をpublish、実機は受信して直接`SCANNING`へジャンプ、Macも自分の`start`を自己受信して`SCANNING`へ到達。leader/followerの非対称設計(押下→解放→publishという手順を踏むのはleaderのみ、followerは受信するだけで目的の状態へ直接進む)が実際のネットワーク越しに機能することを確認できた。
+
+### 次のマイルストーン
+
+`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
