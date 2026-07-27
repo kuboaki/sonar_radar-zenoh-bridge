@@ -15,6 +15,12 @@ sonar_radar/raspi/run.sh と同様、Build HAT のファームウェアを別プ
 シリアルポートを開く。同一プロセス内で先にbuildhatパッケージがシリアル
 ポートを掴むと、spikehat(ctypes直叩き)側の後続オープンと衝突するため、
 run.shにならい別プロセスとして実行する。
+
+Build HATには「準備完了か」を問い合わせるソフトウェアAPIが無く、実機の
+LED(赤→消灯、緑点灯)を目視するしかない。自動テストで人手を介さずに
+待てるよう、コンストラクタ内で実際にforce_is_pressed()が例外を出さずに
+読めるようになるまでポーリングして待つ(is_pushed()が返すようになって
+初めて「準備完了」とみなす、というソフトウェアだけで完結する代替手段)。
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 
 
 def _resolve_libspikehat_python_dir() -> str:
@@ -55,7 +62,12 @@ def _load_buildhat_firmware() -> None:
 class RealStarter:
     """実機のstarter(フォースセンサー)を読む。sonar_radar::unit::starterに相当。"""
 
-    def __init__(self, port: int = 1) -> None:
+    def __init__(
+        self,
+        port: int = 1,
+        ready_timeout_sec: float = 15.0,
+        ready_poll_interval_sec: float = 0.2,
+    ) -> None:
         _load_buildhat_firmware()
 
         lib_dir = _resolve_libspikehat_python_dir()
@@ -66,16 +78,33 @@ class RealStarter:
         self._port = port
         self._hat = spikehat.SpikeHat()
         self._hat.port_config(self._port, spikehat.DEVICE_FORCE)
+        self._wait_until_ready(ready_timeout_sec, ready_poll_interval_sec)
         print(f"[real_starter] 実機のstarter(force sensor, port={self._port})を初期化しました")
+
+    def _wait_until_ready(self, timeout_sec: float, poll_interval_sec: float) -> None:
+        """force_is_pressed()が例外を出さずに読めるようになるまで待つ。
+
+        これがBuild HATのLED(赤→緑)の目視確認に相当する、ソフトウェアだけで
+        完結する準備完了確認。自動テストでも人手なしで安全に待てる。
+        """
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            try:
+                self._hat.force_is_pressed(self._port)
+                return
+            except RuntimeError:
+                time.sleep(poll_interval_sec)
+        raise RuntimeError(
+            f"{timeout_sec}秒待ってもforce sensor(port={self._port})の準備ができませんでした。"
+            "Build HATの接続・電源を確認してください。"
+        )
 
     def is_pushed(self) -> bool:
         try:
             return bool(self._hat.force_is_pressed(self._port))
         except RuntimeError:
-            # port_config直後などBuildHATからまだ値が届いていない場合、
-            # spikehatは「フォースデータなし」のRuntimeErrorを送出する。
-            # 押されていないものとして扱う(sonar_radar.py本体もこの間
-            # 待ち続ける設計で、明示的なエラー処理はしていない)。
+            # _wait_until_ready()で準備完了は確認済みだが、念のため
+            # 防御的に残す(一時的な通信不調等)。押されていないものとして扱う。
             return False
 
     def close(self) -> None:
