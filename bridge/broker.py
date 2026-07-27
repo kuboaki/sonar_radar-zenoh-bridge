@@ -17,11 +17,8 @@ start/stop/detected/calibrated のいずれも、自分のpublishが自分に
 
 【この実装で designed API に追加したもの】
 consume_calibrate_received() は Astah のクラス図には無いメソッド。
-「calibrate を受信したら実際にキャリブレーションを行い、完了したら
-calibrated を publish する」という処理(state machine 上ではまだ
-CALIBRATING に相当する状態が未設計)を、当面はテストハーネス側の
-最小スタブで代替するために追加した。正式に状態機械へ組み込む際に
-設計を見直すこと。
+sonar_radar_app.SonarRadarApp の WAIT_FOR_CALIBRATE から CALIBRATING への
+遷移判定(radar/dome/calibrateを受信した)に使う。
 """
 
 from __future__ import annotations

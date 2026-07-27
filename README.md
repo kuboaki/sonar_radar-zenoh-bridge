@@ -108,7 +108,7 @@ sonar_radar-zenoh-bridge/
 | マシン | hakoniwa-pdu-endpoint | 状態 |
 |---|---|---|
 | Mac（このリポジトリの作業機） | Zenoh有効でビルド・`.local`インストール済み | `bridge/`のマイルストーン1(キャリブレーション)を単体・実機との2台構成の両方で動作確認済み |
-| Raspberry Pi 4B+ (`192.168.1.62`, 実機, ホスト名`spike-hat`) | Zenoh有効でビルド・`.local`インストール済み | `sonar_radar-zenoh-bridge`を最新化し、Macとの2台構成でキャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md) |
+| Raspberry Pi 4B+ (`192.168.11.3`, 実機, ホスト名`spike-hat`) | Zenoh有効でビルド・`.local`インストール済み | `sonar_radar-zenoh-bridge`を最新化し、Macとの2台構成でキャリブレーション・start協調動作を実ネットワーク越しに確認済み。実機の物理starterボタン、`radar_base`(旋回モーター)によるキャリブレーションの実接続も確認済み(`bridge/real_starter.py`/`bridge/real_radar_base.py`)。詳細は[`docs/development_log.md`](docs/development_log.md) |
 | Raspberry Pi 5 (`192.168.1.4`, Ubuntu 24.04 + ROS2 jazzy) | インストール済み（別トライアルで構築） | `sonar_radar-zenoh-bridge`は未クローン、`config/raspi5`も未着手。ブリッジ/モニタ役として今後着手する |
 
 ### Mac向けビルドで詰まった点
@@ -162,13 +162,13 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    python3 run_calibration_smoke_test.py
    ```
 
-   `watch_state.py`側のターミナルに `state -> WAIT_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
+   `watch_state.py`側のターミナルに `state -> WAIT_FOR_CALIBRATE` → `state -> CALIBRATING` → `state -> WAIT_FOR_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
 
 `bridge/env.sh`は`hakoniwa_pdu_endpoint`用の環境変数(`PYTHONPATH`等)をまとめたもの。Pythonの実行環境自体は`sonar_radar/.venv`（Python 3.12, cffi対応）を流用している。
 
 ## 依存リポジトリ
 
-- [sonar_radar](https://github.com/kuboaki/sonar_radar) — 参考にする既存のドメインロジック（キャリブレーション・starter・スキャン）だが、**本リポジトリはこれをimportせず無改造のまま扱わない**。`raspi/sonar_radar.py`には過去の設計転回前の変更（`WAIT_FOR_PEER_CALIBRATED`状態、`on_event`/`notify_*()`フック、コミット`038ed15`）が現在も残っているが、これは近日中にrevertする予定
+- [sonar_radar](https://github.com/kuboaki/sonar_radar) — 参考にする既存のドメインロジック（キャリブレーション・starter・スキャン）だが、**本リポジトリはこれをimportせず無改造のまま扱う**。過去の設計転回前の変更（`WAIT_FOR_PEER_CALIBRATED`状態、`on_event`/`notify_*()`フック、コミット`038ed15`）はrevert済み（`19eccc5`）。実機での経過時間計測のため、状態遷移ログへの`_clock()`タイムスタンプ出力も追加済み（`74f374b`）
 - [hakoniwa-pdu-endpoint](https://github.com/hakoniwalab/hakoniwa-pdu-endpoint) — Zenoh 経由の PDU 通信ライブラリ
 - [hakoniwa-pdu-ros](https://github.com/hakoniwalab/hakoniwa-pdu-ros) — PDU⇄ROSトピック ブリッジ
 
@@ -180,14 +180,14 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 **実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中。進め方と教訓は[`docs/development_log.md`](docs/development_log.md)を参照）**
 
-2. [x] `bridge/` パッケージを新設。`INIT → WAIT_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(`bridge/run_calibration_smoke_test.py`)。
-   - `calibrate`受信→`calibrated`publishという「キャリブレーション処理」自体はステートマシン上まだ未設計のため、`Broker.consume_calibrate_received()`(designed APIには無い追加メソッド)を使った最小スタブで代替している。正式に状態機械へ組み込む際に見直すこと。
+2. [x] `bridge/` パッケージを新設。`INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(`bridge/run_calibration_smoke_test.py`)。
 3. [x] 実機Raspberry Pi 4B+とMacの2台構成で、キャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 4. [x] `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`（到達まで）を実装し、実機Raspberry Pi 4B+とMacの2台構成（デモ会場用の別ルーター経由）でstart協調動作を確認済み(`bridge/run_start_smoke_test.py`)。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 5. [x] `bridge/real_starter.py`(`RealStarter`)を新設し、擬似スイッチではなく実機のフォースセンサー(libspikehat)を直接使う`--real-starter`オプションを追加。実際に実機の物理ボタンを押して、実機・Macとも`SCANNING`まで到達することを確認済み。Build HATには準備完了を問い合わせるAPIが無いため、実際にセンサーが読めるようになるまでポーリングして待つ仕組みを実装した。
-6. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
-7. `sonar_radar` 本体（コミット`038ed15`）をrevert（Mac側でrevertコミット→push、実機Pi4B+でpull）
-8. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+6. [x] キャリブレーション処理自体が未実装だった設計上の欠落を修正（`WAIT_CALIBRATED`を`WAIT_FOR_CALIBRATE`/`CALIBRATING`/`WAIT_FOR_CALIBRATED`の3状態に分割）。`bridge/real_radar_base.py`(`RealRadarBase`)を新設し、擬似スタブではなく実機のモーター(libspikehat)を直接使う`--real-radar-base`オプションを追加。実際にモーターが機械的0位置→オフセット位置へホーミングし、`CALIBRATING`が完了することを実機で確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+7. [x] `sonar_radar` 本体（コミット`038ed15`）をrevert・push・実機pull済み（`19eccc5`）。あわせて実機での経過時間計測のためのタイムスタンプログ出力も追加・push済み（`74f374b`）。
+8. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
+9. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
 
 ## ステータス
 

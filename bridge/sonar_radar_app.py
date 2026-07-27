@@ -6,24 +6,37 @@ docs/zenoh_state_machine_design.md 記載のステートマシン図
 (docs/zenoh_state_machine_design.md の「どう生成するか」の議論での
 「手作業だが規約で縛る」方式)。
 
-マイルストーン1で実装済み: INIT / WAIT_CALIBRATED /
-CALIBRATION_FAILED / TERMINATED。
+マイルストーン1で実装済み: INIT / WAIT_FOR_CALIBRATE / CALIBRATING /
+WAIT_FOR_CALIBRATED / CALIBRATION_FAILED / TERMINATED。
 マイルストーン2で追加: WAIT_FOR_START_PRESS / WAIT_FOR_START_RELEASE /
 WAIT_FOR_SCAN_START / SCANNING(到達まで)。押下→解放→start協調が
 このマイルストーンの範囲。MARKER_DETECTED以降(detected対称処理、
 WAIT_FOR_INVERT、stop対称処理、SCAN_FAILED)は次のマイルストーンで着手。
 
+radar/dome/calibrate を受信してから実際にキャリブレーションを実施する
+までを CALIBRATING で表す(entry で radar_base_calibrate() を呼び、
+完了は radar_base_is_calibrated() を毎tickポーリングして判定する。
+starter_is_pushed() 等と同じ「レベルトリガーをイベント扱いする」書き方)。
+モーターホーミング等、完了に時間がかかる処理を想定しており、
+calibrate() 自体は非同期(駆動開始のみ)である前提。
+
 starter_is_pushed()/marker_detector_is_detected()/
-radar_base_invert_direction()/scanner_get_distance() は、実ハードウェア
+radar_base_invert_direction()/radar_base_calibrate()/
+radar_base_is_calibrated()/scanner_get_distance() は、実ハードウェア
 (libspikehat)がまだこの層に接続されていないため、コンストラクタで
 注入可能にしている(未指定時はfalse/no-op/0を返す安全なスタブ)。
 
-calibration_timeout_sec は WAIT_CALIBRATED のタイムアウト秒数
-(設計文書の「timeout秒数はこのステートマシンを持つクラスの属性
-（既定5秒）」に対応、コンストラクタで変更可能)。これは「準備が整い
-run()が動き出してから、相手のcalibratedが揃うのを待つ時間」であり、
-実機のBuild HAT等のハードウェア初期化にかかる時間は含まない
-(初期化は broker.open() より前、run() が始まる前に完了させること)。
+calibration_timeout_sec は WAIT_FOR_CALIBRATE / CALIBRATING /
+WAIT_FOR_CALIBRATED を通したタイムアウト秒数(設計文書の「timeout秒数は
+このステートマシンを持つクラスの属性（既定5秒）」に対応、コンストラクタで
+変更可能)。これは「準備が整いrun()が動き出してから、キャリブレーションが
+完了し相手のcalibratedが揃うのを待つ時間」であり、実機のBuild HAT等の
+ハードウェア初期化にかかる時間は含まない(初期化は broker.open() より前、
+run() が始まる前に完了させること)。タイマーの停止は成功経路では
+WAIT_FOR_CALIBRATED の exit、失敗経路(3状態いずれからのtimer_is_fired()
+でも)は CALIBRATION_FAILED の entry で行う。WAIT_FOR_CALIBRATED からの
+失敗経路だけexitとentryの両方でtimer_stop()が呼ばれる形になるが、
+spikehat_timer_reset()は冪等(何度呼んでも安全)なので問題ない。
 """
 
 from __future__ import annotations
@@ -42,7 +55,9 @@ from spikehat_timer import (
 
 class State(enum.Enum):
     INIT = "INIT"
-    WAIT_CALIBRATED = "WAIT_CALIBRATED"
+    WAIT_FOR_CALIBRATE = "WAIT_FOR_CALIBRATE"
+    CALIBRATING = "CALIBRATING"
+    WAIT_FOR_CALIBRATED = "WAIT_FOR_CALIBRATED"
     CALIBRATION_FAILED = "CALIBRATION_FAILED"
     WAIT_FOR_START_PRESS = "WAIT_FOR_START_PRESS"
     WAIT_FOR_START_RELEASE = "WAIT_FOR_START_RELEASE"
@@ -60,6 +75,8 @@ class SonarRadarApp:
         starter_is_pushed: Optional[Callable[[], bool]] = None,
         marker_detector_is_detected: Optional[Callable[[], bool]] = None,
         radar_base_invert_direction: Optional[Callable[[], None]] = None,
+        radar_base_calibrate: Optional[Callable[[], None]] = None,
+        radar_base_is_calibrated: Optional[Callable[[], bool]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 5.0,
     ) -> None:
@@ -72,6 +89,8 @@ class SonarRadarApp:
         self._starter_is_pushed_impl = starter_is_pushed or (lambda: False)
         self._marker_detector_is_detected_impl = marker_detector_is_detected or (lambda: False)
         self._radar_base_invert_direction_impl = radar_base_invert_direction or (lambda: None)
+        self._radar_base_calibrate_impl = radar_base_calibrate or (lambda: None)
+        self._radar_base_is_calibrated_impl = radar_base_is_calibrated or (lambda: False)
         self._scanner_get_distance_impl = scanner_get_distance or (lambda: 0)
 
     @property
@@ -99,6 +118,12 @@ class SonarRadarApp:
     def radar_base_invert_direction(self) -> None:
         self._radar_base_invert_direction_impl()
 
+    def radar_base_calibrate(self) -> None:
+        self._radar_base_calibrate_impl()
+
+    def radar_base_is_calibrated(self) -> bool:
+        return bool(self._radar_base_is_calibrated_impl())
+
     def scanner_get_distance(self) -> int:
         return self._scanner_get_distance_impl()
 
@@ -118,8 +143,12 @@ class SonarRadarApp:
     def run(self) -> None:
         if self._state is State.INIT:
             self._tick_init()
-        elif self._state is State.WAIT_CALIBRATED:
-            self._tick_wait_calibrated()
+        elif self._state is State.WAIT_FOR_CALIBRATE:
+            self._tick_wait_for_calibrate()
+        elif self._state is State.CALIBRATING:
+            self._tick_calibrating()
+        elif self._state is State.WAIT_FOR_CALIBRATED:
+            self._tick_wait_for_calibrated()
         elif self._state is State.CALIBRATION_FAILED:
             self._tick_calibration_failed()
         elif self._state is State.WAIT_FOR_START_PRESS:
@@ -138,9 +167,23 @@ class SonarRadarApp:
         # このアプリでは calibration_participants はコンストラクタ引数で
         # 受け取り済み、timer もコンストラクタで作成済みのため、
         # ここでは即座に自動遷移するのみ。
-        self._transition_to(State.WAIT_CALIBRATED)
+        self._transition_to(State.WAIT_FOR_CALIBRATE)
 
-    def _tick_wait_calibrated(self) -> None:
+    def _tick_wait_for_calibrate(self) -> None:
+        if self._broker.consume_calibrate_received():
+            self._transition_to(State.CALIBRATING)
+            return
+        if self.timer_is_fired():
+            self._transition_to(State.CALIBRATION_FAILED)
+
+    def _tick_calibrating(self) -> None:
+        if self.radar_base_is_calibrated():
+            self._transition_to(State.WAIT_FOR_CALIBRATED)
+            return
+        if self.timer_is_fired():
+            self._transition_to(State.CALIBRATION_FAILED)
+
+    def _tick_wait_for_calibrated(self) -> None:
         if self.check_calibration_participants():
             self.timer_stop()  # exit
             self._transition_to(State.WAIT_FOR_START_PRESS)
@@ -184,10 +227,15 @@ class SonarRadarApp:
 
     def _transition_to(self, new_state: State) -> None:
         self._state = new_state
-        if new_state is State.WAIT_CALIBRATED:
+        if new_state is State.WAIT_FOR_CALIBRATE:
             self._broker.publish_calibrate()  # entry
             self.timer_start(self._calibration_timeout_sec)  # entry
+        elif new_state is State.CALIBRATING:
+            self.radar_base_calibrate()  # entry
+        elif new_state is State.WAIT_FOR_CALIBRATED:
+            self._broker.publish_calibrated()  # entry
         elif new_state is State.CALIBRATION_FAILED:
+            self.timer_stop()  # entry
             print("[sonar_radar_app] entry: キャリブレーション失敗を通知")
         elif new_state is State.WAIT_FOR_SCAN_START:
             self._broker.publish_start()  # entry

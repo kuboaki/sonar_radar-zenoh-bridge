@@ -116,10 +116,57 @@
 
 4. **「人がLEDを見てから相手を起動する」を自動テストの前提にする必要は無い。** `RealStarter`は既に「データ未着なら例外」という形でハード側の準備状況を検知できていたため、コンストラクタ内で`force_is_pressed()`が例外を出さずに読めるようになるまでポーリングして待つ`_wait_until_ready()`を追加した。これはLED目視の代替となる、ソフトウェアだけで完結する準備完了確認であり、自動テストでも人手なしで安全に待てる。準備ができなければ明示的に例外を送出する(既定タイムアウト15秒)。
 
-5. **残り約5.5秒の内訳は、SPIKEセンサー全般に共通する「安定待ち」らしい。** ユーザーの経験(SPIKEアプリケーション開発での不文律)によれば、カラーセンサーはライトが安定するまで、距離センサーは音の反射を確認できるまで、初期化後にそれぞれ安定待ちの時間が必要とのこと。フォースセンサーに限らず、今後 `marker_detector`(カラー/距離センサー)や `scanner`(距離センサー)を実接続する際にも、同様のポーリング待ち(`_wait_until_ready`と同じパターン)が必要になる見込み。
+5. **残り約5.5秒の内訳は、SPIKEセンサー全般に共通する「安定待ち」らしい。**(※後日の全ポート実測により訂正。下記「実機での初期化・キャリブレーション所要時間の実測」を参照) ユーザーの経験(SPIKEアプリケーション開発での不文律)によれば、カラーセンサーはライトが安定するまで、距離センサーは音の反射を確認できるまで、初期化後にそれぞれ安定待ちの時間が必要とのこと。フォースセンサーに限らず、今後 `marker_detector`(カラー/距離センサー)や `scanner`(距離センサー)を実接続する際にも、同様のポーリング待ち(`_wait_until_ready`と同じパターン)が必要になる見込み。
 
 **結果**: `--calibration-timeout`を60秒に緩め(実機起動側とMac側の起動タイミングを厳密に揃えなくても済むように)、実機(leader, `--real-starter`)とMac(follower)を新ルーター経由の2台構成で実行したところ、キャリブレーションが揃った後 `WAIT_FOR_START_PRESS` で待機し、ユーザーが実機のフォースセンサーを実際に押して離すと、実機は `WAIT_FOR_START_RELEASE` → `WAIT_FOR_SCAN_START` → `SCANNING`、Macは `start` を受信して直接 `SCANNING` へ到達した(16:04:45.032 `WAIT_FOR_START_PRESS` → 16:04:46.669 `WAIT_FOR_START_RELEASE` → 16:04:46.734/46.773 `SCANNING`、押下から到達まで約1.7秒)。**擬似スイッチではなく実機の物理ボタンを使った、初めてのエンドツーエンド動作確認。**
 
-### 次のマイルストーン
+## 設計修正: CALIBRATING状態の追加(キャリブレーション処理自体が未実装だった欠落を修正)
+
+マイルストーン2までの実装では、`WAIT_CALIBRATED`が`radar/dome/calibrate`をpublishして`calibrated`の到達を待つだけで、**実機にもシミュレータにも「受信したcalibrateに応じて実際にキャリブレーションを実行する」処理自体が存在しなかった**(スモークテスト側の`consume_calibrate_received()`→即`publish_calibrated()`という最小スタブで代替していた)。ユーザー自身がこの欠落に気づき、指摘を受けて設計を修正した。
+
+**修正後の設計**: `WAIT_CALIBRATED`を3状態に分割し、`WAIT_CALIBRATED`という名前自体も他の`WAIT_FOR_X`命名規約に合わせて廃止した。
+
+- `WAIT_FOR_CALIBRATE`: entryで`calibrate`をpublish、`timer_start(5s)`。`calibrate`を受信したら`CALIBRATING`へ。
+- `CALIBRATING`: entryで`radar_base_calibrate()`を実行(モーターホーミング等、完了に時間がかかる非同期処理を想定)。`radar_base_is_calibrated()`の完了を待って`WAIT_FOR_CALIBRATED`へ。
+- `WAIT_FOR_CALIBRATED`(旧`WAIT_CALIBRATED`を縮小): entryで`calibrated`をpublish、参加者全員の`calibrated`到達(`check_calibration_participants()`)を待って`WAIT_FOR_START_PRESS`へ。exitで`timer_stop()`。
+
+`radar_base`クラスに`calibrate()`/`is_calibrated()`操作を新設(中身は空、実接続は次のマイルストーンで着手)。`sonar_radar_app.py`側にも同名の注入可能スタブを追加し、`run_calibration_smoke_test.py`/`run_start_smoke_test.py`にあった旧スタブループは不要になり削除した。
+
+### 得られた教訓
+
+6. **UMLの完了遷移(イベント無し自動遷移)のガード条件は、1度しか評価されない。** 当初`CALIBRATING`→`WAIT_FOR_CALIBRATED`を「ガード`[radar_base_is_calibrated()]`付きの自動遷移」として設計したが、ユーザーから「完了遷移のガードは1回評価されて偽だとその後評価されなくなる、毎tickポーリングしたいなら`starter_is_pushed()`と同じようにガードではなくイベントとして書くべき」との指摘を受けた。この図では「レベルトリガーの条件をイベント欄に書く(エッジトリガではなく評価時状態による判定として扱う)」という規約が既に`starter_is_pushed()`等で使われており、それに合わせてイベント欄に`radar_base_is_calibrated()`と書き、ガードは空にした。
+
+7. **タイマー停止の多重呼び出しは、実装が冪等なら設計上問題にならない。** `WAIT_FOR_CALIBRATED`の失敗経路(`timer_is_fired()`→`CALIBRATION_FAILED`)では、exit(`WAIT_FOR_CALIBRATED`側)とentry(`CALIBRATION_FAILED`側)の両方で`timer_stop()`が呼ばれる形になった。`spikehat_timer_reset()`の実装(`_deadline=None, _fired=False`を設定するだけ)を確認し、冪等であることを確認した上で「現状維持でよい」と判断した。また、この後始末を「宛先側のentryに一本化する」ため`WAIT_FOR_START_PRESS`側に`timer_stop()`を足す案も検討したが、「`WAIT_FOR_START_PRESS`はキャリブレーションとは別の関心事であり、そこにキャリブレーションのタイムアウト処理の後始末を書くのは責務の侵犯になる」との判断で見送った。責務の分離を、コードの重複排除よりも優先した判断。
+
+## 実機での初期化・キャリブレーション所要時間の実測(教訓5の訂正)
+
+CALIBRATING導入にあたり、実機のハードウェア初期化・キャリブレーションが実際どれくらいの時間で完了するのか(そして、その間ずっと同期的にブロックしてよいのか)を、実機(`192.168.11.3`)で直接計測して確認した。
+
+**port_config()単体の計測(4ポート全て)**: `hat.port_config(PORT_MOTOR/FORCE/COLOR/DISTANCE, ...)` を全ポート分計測したところ、支配的なのは `SpikeHat()` のコンストラクタ自体(約5.3秒、複数回の実測で5.31〜5.31秒台と非常に安定)であり、**`port_config()` 自体は4ポートとも実質0秒、各センサーの初回読み取り(force/color/distance/motor)も1〜2回のポーリングでほぼ即座に成功した**。前回のマイルストーン2「教訓5」で「カラー/距離センサーも安定待ちが必要」と推測していたが、**今回の全ポート計測ではその推測は裏付けられなかった**。以前 `RealStarter()` 構築で見えた約5.5秒の残り時間は、フォースセンサー固有の安定待ちではなく、`SpikeHat()` 構築(ハードウェアハンドシェイクと思われる)そのものだった可能性が高い。
+
+**カラーセンサーのランプが点灯しない件**: 実機を目視していたユーザーから、`color_read_hsv()` は値を返すのにカラーセンサーのランプが点灯していないという指摘を受けた。`libspikehat`(`/home/kuboaki/Projects/libspikehat/src/sensor.c`)の `color_switch_mode()` を確認したところ、モード切替コマンドは `"port %d; port_plimit 1; set -1; select; select %d; selrate 10"` で、コメントには「`set -1` でランプ電源を**維持**してからモード切り替え」とある。「維持」ということは能動的にONにする命令ではなく、消灯状態ならそのまま消灯し続ける可能性がある。**値の読み取りが成功することと、ランプが物理的に点灯することは別の話であり、libspikehat側の実装課題として残っている**(このセッションでは未修正、原因の特定まで)。
+
+**`sonar_radar.py` 実機実行での経過時間ログ追加**: 単体実行では完了を待てばよかったが、Zenoh版では待機中に他ノードとの協調(calibrateの送受信等)が並行して起きるため、「何にどれだけ時間がかかっているか」を見えるようにする必要があるという指摘を受け、一時的な計測ではなく `sonar_radar.py` 本体に恒久的なタイムスタンプ出力を追加した(`SonarRadarSM` の各状態遷移ログに `self._clock()`、`main()` に `SpikeHat()` 構築時間の直接計測を追加)。コミット `74f374b`(直前の `038ed15` 差し戻し `19eccc5` の上に積む形)。
+
+実機で `time python3 sonar_radar.py` を複数回実行し、以下の傾向を確認した。
+
+| 区間 | 実測値(複数回) | 傾向 |
+|---|---|---|
+| `SpikeHat()`構築 | 5.31秒(直接計測)、5.31秒、5.314秒(独立計測) | **非常に安定した固定コスト** |
+| キャリブレーション(`CALIB_TO_ZERO`+`CALIB_TO_OFFSET`) | 2.21秒、2.56秒、2.67秒 | 概ね2.2〜2.7秒の範囲で安定 |
+| ボタン押下待ち(`WAIT_FOR_START`) | <1秒、3.77秒、1.20秒 | **人間の反応時間依存で大きくばらつく** |
+| 0位置復帰(`RETURN_TO_ORIGIN`) | 約2.2秒(推定)、3.81秒、5.07秒 | スキャンで回転した角度に比例して変動 |
+
+**設計への示唆**: `SpikeHat()`構築と固定`sleep(1.0)`(合計約6.3秒)は、通信も何も始まっていない段階の純粋な同期ブロックであり問題ない。一方、**モーターホーミング自体(約2.2〜2.7秒)を、Zenoh版の`CALIBRATING`状態で`radar_base_is_calibrated()`を毎tickポーリングする設計(同期ブロックにしない)にしたのは正しい判断だった**ことが、この実測で裏付けられた。もし同期ブロックにしていたら、その間、相手ノードからのZenohメッセージ処理が止まってしまうところだった。
+
+## Zenoh版を実機で動かす: キャリブレーション(radar_base)の実接続(完了)
+
+`bridge/sonar_radar_app.py` の `radar_base_calibrate`/`radar_base_is_calibrated` はこれまでスタブ(`lambda: True` 等)のままだった。`bridge/real_starter.py`(`RealStarter`)と同じ設計方針(`sonar_radar-zenoh-bridge` は `sonar_radar` 本体をimportせず、ハードウェア抽象化ライブラリの `libspikehat` だけを直接使う)を踏襲し、`bridge/real_radar_base.py`(`RealRadarBase`)を新設した。
+
+**実装**: `sonar_radar.py` の `CALIB_TO_ZERO`/`CALIB_TO_OFFSET`(毎tick `motor_pwm()` で微調整する実装)とは異なり、`spikehat` の `motor_run_to_position()`(非同期・fire-and-forgetでBuildHAT側がランプ移動を行う)を使う設計にした。`calibrate()`を1回呼ぶと機械的0位置への移動コマンドを送り、以後`is_calibrated()`を毎tickポーリングするだけで、内部で「0位置到達→オフセット位置への移動コマンド発行→オフセット到達」の2段階を自動的に進める。`CALIBRATING`状態の「entryで1回・以後毎tickポーリング」という構造にちょうど合う。`run_calibration_smoke_test.py`に`--real-radar-base`フラグを追加した。
+
+**結果**: 実機(`192.168.11.3`、origin=2)で `--real-radar-base` を指定して実行したところ、`WAIT_FOR_CALIBRATE` → `CALIBRATING`(実際にモーターが機械的0位置→オフセット位置へホーミング) → `WAIT_FOR_CALIBRATED` → `WAIT_FOR_START_PRESS` まで到達した。ユーザー自身が実機のターミナルで直接実行して確認(pushしなくても、`scp`で転送済みのファイルだけで実機での動作確認ができることも確認できた)。**Zenoh版のCALIBRATING状態が、実際にモーターホーミングを行う実機で初めて成功したエンドツーエンド確認。**
+
+### 次のマイルストーン(継続)
 
 `MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。実機のstarter実接続での2台構成テストも、この記録を踏まえて再挑戦する(実機側を先に起動する運用で)。

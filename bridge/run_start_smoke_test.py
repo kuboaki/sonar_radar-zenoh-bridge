@@ -114,6 +114,9 @@ def main() -> int:
         starter_is_pushed=starter_is_pushed,
         scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
         calibration_timeout_sec=args.calibration_timeout,
+        # 実機のradar_baseがまだ未接続のため、キャリブレーションは即座に
+        # 完了したことにするスタブ(次のマイルストーンで実接続に置き換える)。
+        radar_base_is_calibrated=lambda: True,
     )
 
     def _report(state: State) -> None:
@@ -132,10 +135,6 @@ def main() -> int:
 
     try:
         while time.monotonic() < deadline:
-            # calibrate受信 -> calibrated publish のスタブ(マイルストーン1と同じ)
-            if broker.consume_calibrate_received():
-                broker.publish_calibrated()
-
             app.run()
 
             if app.state in reached_states:
