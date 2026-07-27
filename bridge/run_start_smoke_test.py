@@ -6,11 +6,14 @@ WAIT_FOR_START_PRESS → WAIT_FOR_START_RELEASE → WAIT_FOR_SCAN_START →
 SCANNING を、実際のZenoh経由のpublish/受信で確認する。
 
 --leader を指定した側だけが、starterボタン押下をローカルに検知した
-ものとして振る舞う(仮想スイッチ)。followerは受信のみで追従する。
+ものとして振る舞う(仮想スイッチ、または --real-starter 指定時は実機の
+フォースセンサー)。followerは受信のみで追従する。
 
-starter/marker_detector/radar_base/scannerの実ハードウェアはまだこの層に
-接続されていないため、starterはタイマー駆動の擬似スイッチ(_FakeStarter)、
-scannerは固定値を返すスタブで代替している。
+marker_detector/radar_base/scannerの実ハードウェアはまだこの層に接続
+されていないため、scannerは固定値を返すスタブで代替している。starterは
+既定ではタイマー駆動の擬似スイッチ(_FakeStarter)だが、--real-starter を
+指定すると実機(Raspberry Pi)のlibspikehatフォースセンサーを直接読む
+(real_starter.RealStarter)。
 """
 
 from __future__ import annotations
@@ -65,7 +68,12 @@ def main() -> int:
     )
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
     parser.add_argument(
-        "--press-after", type=float, default=1.0, help="leader側: 何秒後にstarterを押したことにするか"
+        "--press-after", type=float, default=1.0, help="leader側: 何秒後にstarterを押したことにするか(--real-starter未指定時のみ)"
+    )
+    parser.add_argument(
+        "--real-starter",
+        action="store_true",
+        help="starterを擬似スイッチではなく実機のフォースセンサー(libspikehat)で読む",
     )
     parser.add_argument("--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数")
     args = parser.parse_args()
@@ -75,13 +83,22 @@ def main() -> int:
     broker = Broker(f"sonar_radar_zenoh_bridge_start_smoketest_{args.origin}", args.origin)
     broker.open(args.config)
 
-    fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
+    starter_close = None
+    if args.real_starter:
+        from real_starter import RealStarter
+
+        real_starter = RealStarter()
+        starter_is_pushed = real_starter.is_pushed
+        starter_close = real_starter.close
+    else:
+        fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
+        starter_is_pushed = fake_starter.is_pushed
 
     app = SonarRadarApp(
         broker=broker,
         calibration_participants=participants,
         is_leader=args.leader,
-        starter_is_pushed=fake_starter.is_pushed,
+        starter_is_pushed=starter_is_pushed,
         scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
     )
 
@@ -115,6 +132,8 @@ def main() -> int:
             return 1
     finally:
         broker.close()
+        if starter_close is not None:
+            starter_close()
 
     if app.state is State.SCANNING:
         print("[start-smoke-test] OK: SCANNING に到達しました")
