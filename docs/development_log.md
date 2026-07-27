@@ -96,6 +96,22 @@
 - 単体(自己ループバック): leader役で `WAIT_FOR_START_PRESS`(擬似押下)→`WAIT_FOR_START_RELEASE`(擬似解放)→`WAIT_FOR_SCAN_START`(start publish)→(自己受信)→`SCANNING` まで到達
 - 実機(follower)+Mac(leader)、新ルーター(`192.168.11.0/24`)経由の2台構成: 双方が `WAIT_CALIBRATED`→`WAIT_FOR_START_PRESS` まで揃った後、Macがローカルで擬似押下→解放→`start`をpublish、実機は受信して直接`SCANNING`へジャンプ、Macも自分の`start`を自己受信して`SCANNING`へ到達。leader/followerの非対称設計(押下→解放→publishという手順を踏むのはleaderのみ、followerは受信するだけで目的の状態へ直接進む)が実際のネットワーク越しに機能することを確認できた。
 
+### 実機のstarter(force sensor)実接続、教訓: ハードウェア準備完了を問い合わせる方法が無い
+
+ユーザーから、擬似スイッチではなく実機を実際に操作して試したいという要望を受け、`bridge/real_starter.py`(`RealStarter`)を新設した。`sonar_radar/raspi/libspikehat`のPythonバインディングを直接使う(`sonar_radar`本体はimportしない設計方針の中で、ハードウェア抽象化ライブラリであるlibspikehatだけは例外的に直接使う)。
+
+**つまずいた点と教訓**:
+
+1. **BuildHATのファームウェアロードを忘れていた。** `sonar_radar/raspi/run.sh`が`python3 -c "from buildhat import Motor; Motor('A')"`を別プロセスで実行してからアプリ本体を起動している手順を見落としており、`force_is_pressed()`が「フォースデータなし」のRuntimeErrorを送出していた。同じ手順を`real_starter.py`に追加して解消した(ただし、計測すると連続2回の呼び出しはいずれも約0.78秒で、"ロード"というより毎回の軽い確認処理のようだった)。
+
+2. **ハードウェア初期化にかかる時間は、電源投入直後やハードウェアリセット直後は長い(ユーザーの経験では10秒近く)。** これがキャリブレーションのタイムアウト(既定5秒)より長くなりうるため、`CALIBRATION_FAILED`に落ちた。`calibration_timeout_sec`をコンストラクタで指定可能にしたが、これは対症療法にはならない: **その5秒は「準備が整いrun()が動き出してから、相手のcalibratedが揃うのを待つ時間」であり、ハードウェア初期化にかかる時間を吸収するためのものではない**、という指摘を受けた。ハードウェア初期化は`broker.open()`より前、`run()`が動き出す前に完了させる設計のままとした。
+
+3. **根本的な制約: `libspikehat`(および土台のbuildhatライブラリ)には、ソフトウェアから「準備完了か」を問い合わせるAPIが無い。** 実際に読んでみて、データがまだ届いていなければ例外が返る、という形でしか判断できない。したがって、ハードウェア初期化にどれだけ時間がかかるかをアプリケーション側から正確に・事前に把握する方法が無い。`RealStarter.is_pushed()`は、この「データ未着」を例外で検知して「未押下」として扱う(fail-safeにする)ことはできるが、これは根本的な解決ではない。**実務上は、実機側を先に起動して目視で動作開始(broker.open()以降のログ)を確認してから相手側を起動する、という運用でしか確実に担保できない。** コード側のタイムアウト調整では本質的には解決しない、という理解で合意した。
+
+   公式ドキュメント([Getting started with the Raspberry Pi Build HAT](https://www.raspberrypi.com/documentation/accessories/build-hat.html), [PDFガイド](https://pip.raspberrypi.com/documents/RP-008141-DS-getting-started-build-hat.pdf))で以下2点を確認した。
+   - ファームウェアロードは **Raspberry Pi起動ごとに1回だけ** で、以降のPython実行では待たされない("Subsequent executions of a Python program will not require this pause.")。実測(0.78秒×2回連続)と整合しており、初回の起動直後だけ数秒〜10秒近くかかりうるという理解を裏付ける。
+   - **LED(赤→消灯、緑点灯)による物理的な準備完了サインがある。** ソフトウェアAPIでの問い合わせはできないが、目視確認の手段としては存在する。今回の運用(実機を先に起動し目視確認してから相手を起動する)を後押しする材料になる。
+
 ### 次のマイルストーン
 
-`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
+`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。実機のstarter実接続での2台構成テストも、この記録を踏まえて再挑戦する(実機側を先に起動する運用で)。
