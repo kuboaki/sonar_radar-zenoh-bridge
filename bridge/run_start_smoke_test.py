@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""run_start_smoke_test.py — 第2マイルストーンの動作確認スクリプト。
+
+第1マイルストーン(キャリブレーション)に続けて、
+WAIT_FOR_START_PRESS → WAIT_FOR_START_RELEASE → WAIT_FOR_SCAN_START →
+SCANNING を、実際のZenoh経由のpublish/受信で確認する。
+
+--leader を指定した側だけが、starterボタン押下をローカルに検知した
+ものとして振る舞う(仮想スイッチ)。followerは受信のみで追従する。
+
+starter/marker_detector/radar_base/scannerの実ハードウェアはまだこの層に
+接続されていないため、starterはタイマー駆動の擬似スイッチ(_FakeStarter)、
+scannerは固定値を返すスタブで代替している。
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+
+from broker import Broker
+from console_report import console_report
+from sonar_radar_app import SonarRadarApp, State
+from state_reporter import with_state_change_reporting
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_CONFIG = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.json")
+
+_OVERALL_TIMEOUT_SEC = 20.0
+_TICK_INTERVAL_SEC = 0.05
+_DUMMY_DISTANCE_MM = 500
+
+
+class _FakeStarter:
+    """starterボタンの仮想スイッチ。leader側のテストで使う。
+
+    一定時間後に「押された」を模擬し、さらに一定時間後に「離された」を
+    模擬する(press_after_sec <= 経過時間 < press_after_sec + hold_sec の間だけ true)。
+    """
+
+    def __init__(self, press_after_sec: float, hold_sec: float) -> None:
+        self._t0 = time.monotonic()
+        self._press_after = press_after_sec
+        self._hold = hold_sec
+
+    def is_pushed(self) -> bool:
+        elapsed = time.monotonic() - self._t0
+        return self._press_after <= elapsed < self._press_after + self._hold
+
+
+def _parse_participants(text: str) -> set:
+    return {int(v) for v in text.split(",") if v.strip()}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="start協調(押下〜SCANNING到達)の動作確認スクリプト")
+    parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
+    parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
+    parser.add_argument(
+        "--participants",
+        default=None,
+        help="calibration_participantsのカンマ区切り(例: 1,2)。省略時は自分のoriginのみ",
+    )
+    parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
+    parser.add_argument(
+        "--press-after", type=float, default=1.0, help="leader側: 何秒後にstarterを押したことにするか"
+    )
+    parser.add_argument("--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数")
+    args = parser.parse_args()
+
+    participants = _parse_participants(args.participants) if args.participants else {args.origin}
+
+    broker = Broker(f"sonar_radar_zenoh_bridge_start_smoketest_{args.origin}", args.origin)
+    broker.open(args.config)
+
+    fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
+
+    app = SonarRadarApp(
+        broker=broker,
+        calibration_participants=participants,
+        is_leader=args.leader,
+        starter_is_pushed=fake_starter.is_pushed,
+        scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
+    )
+
+    def _report(state: State) -> None:
+        console_report(state.value, prefix="start-smoke-test")
+        broker.publish_state(state.value)
+
+    with_state_change_reporting(app, _report)
+
+    deadline = time.monotonic() + args.timeout
+    reached_states = {State.SCANNING, State.TERMINATED}
+
+    print(
+        f"[start-smoke-test] origin={args.origin} participants={sorted(participants)} "
+        f"leader={args.leader} config={args.config}"
+    )
+
+    try:
+        while time.monotonic() < deadline:
+            # calibrate受信 -> calibrated publish のスタブ(マイルストーン1と同じ)
+            if broker.consume_calibrate_received():
+                broker.publish_calibrated()
+
+            app.run()
+
+            if app.state in reached_states:
+                break
+            time.sleep(_TICK_INTERVAL_SEC)
+        else:
+            print("[start-smoke-test] タイムアウト: 状態遷移が完了しなかった", file=sys.stderr)
+            return 1
+    finally:
+        broker.close()
+
+    if app.state is State.SCANNING:
+        print("[start-smoke-test] OK: SCANNING に到達しました")
+        return 0
+    else:
+        print(f"[start-smoke-test] NG: 最終状態 {app.state.value}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
