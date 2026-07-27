@@ -76,13 +76,23 @@ def main() -> int:
         help="starterを擬似スイッチではなく実機のフォースセンサー(libspikehat)で読む",
     )
     parser.add_argument("--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数")
+    parser.add_argument(
+        "--calibration-timeout",
+        type=float,
+        default=5.0,
+        help="WAIT_CALIBRATEDのタイムアウト秒数(既定5秒)。ハードウェア初期化が完了し"
+        "動作可能になってから、相手のcalibratedが揃うのを待つ時間(ハードウェア初期化の"
+        "時間そのものを吸収するためのものではない。初期化はbroker.open()より前に済ませ、"
+        "このタイマーが動き出す前に完了させること)",
+    )
     args = parser.parse_args()
 
     participants = _parse_participants(args.participants) if args.participants else {args.origin}
 
-    broker = Broker(f"sonar_radar_zenoh_bridge_start_smoketest_{args.origin}", args.origin)
-    broker.open(args.config)
-
+    # ハードウェア初期化(特にBuild HATのファームウェアロード)は数十秒かかる
+    # ことがあるため、WAIT_CALIBRATEDのタイマーが動き出す前(broker.open()より前)
+    # に済ませておく。相手側は、この初期化が終わったことを示す
+    # "初期化しました"のログを見てから自分のスクリプトを起動すること。
     starter_close = None
     if args.real_starter:
         from real_starter import RealStarter
@@ -94,12 +104,16 @@ def main() -> int:
         fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
         starter_is_pushed = fake_starter.is_pushed
 
+    broker = Broker(f"sonar_radar_zenoh_bridge_start_smoketest_{args.origin}", args.origin)
+    broker.open(args.config)
+
     app = SonarRadarApp(
         broker=broker,
         calibration_participants=participants,
         is_leader=args.leader,
         starter_is_pushed=starter_is_pushed,
         scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
+        calibration_timeout_sec=args.calibration_timeout,
     )
 
     def _report(state: State) -> None:

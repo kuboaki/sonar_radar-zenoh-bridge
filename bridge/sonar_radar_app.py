@@ -17,6 +17,13 @@ starter_is_pushed()/marker_detector_is_detected()/
 radar_base_invert_direction()/scanner_get_distance() は、実ハードウェア
 (libspikehat)がまだこの層に接続されていないため、コンストラクタで
 注入可能にしている(未指定時はfalse/no-op/0を返す安全なスタブ)。
+
+calibration_timeout_sec は WAIT_CALIBRATED のタイムアウト秒数
+(設計文書の「timeout秒数はこのステートマシンを持つクラスの属性
+（既定5秒）」に対応、コンストラクタで変更可能)。これは「準備が整い
+run()が動き出してから、相手のcalibratedが揃うのを待つ時間」であり、
+実機のBuild HAT等のハードウェア初期化にかかる時間は含まない
+(初期化は broker.open() より前、run() が始まる前に完了させること)。
 """
 
 from __future__ import annotations
@@ -54,12 +61,14 @@ class SonarRadarApp:
         marker_detector_is_detected: Optional[Callable[[], bool]] = None,
         radar_base_invert_direction: Optional[Callable[[], None]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
+        calibration_timeout_sec: float = 5.0,
     ) -> None:
         self._broker = broker
         self._calibration_participants = calibration_participants
         self.is_leader = is_leader
         self._timer = spikehat_timer_create()
         self._state = State.INIT
+        self._calibration_timeout_sec = calibration_timeout_sec
         self._starter_is_pushed_impl = starter_is_pushed or (lambda: False)
         self._marker_detector_is_detected_impl = marker_detector_is_detected or (lambda: False)
         self._radar_base_invert_direction_impl = radar_base_invert_direction or (lambda: None)
@@ -177,7 +186,7 @@ class SonarRadarApp:
         self._state = new_state
         if new_state is State.WAIT_CALIBRATED:
             self._broker.publish_calibrate()  # entry
-            self.timer_start(5.0)  # entry
+            self.timer_start(self._calibration_timeout_sec)  # entry
         elif new_state is State.CALIBRATION_FAILED:
             print("[sonar_radar_app] entry: キャリブレーション失敗を通知")
         elif new_state is State.WAIT_FOR_SCAN_START:
