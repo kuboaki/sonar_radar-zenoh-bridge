@@ -1,12 +1,13 @@
 {
-  // Mac (zenohd) への接続先。IPではなくmDNS(.local)名を使うことで、
-  // ネットワークが変わってIPが変化しても書き換え不要になるか実験中。
-  // mDNSが通らない環境では接続できないので、その場合はIPに戻すこと
-  // (例: "tcp/192.168.1.195:7447")。
+  // 【現在有効な接続先】ネットワークを切り替えるときは、このファイルを
+  // 手で編集せず、client.home.json5 か client.demo.json5 をこのファイル名に
+  // コピーして使うこと(例: cp client.demo.json5 client.json5)。
+  //
+  // 現在: デモ会場用の実験ルーター(192.168.11.2)
   mode: "client",
   connect: {
     endpoints: [
-      "tcp/Shin-MacBookAir-15.local:7447"
+      "tcp/192.168.11.2:7447"
     ]
   }
 }

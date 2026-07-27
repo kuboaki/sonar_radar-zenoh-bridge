@@ -1,0 +1,10 @@
+{
+  // 自宅ネットワーク用。Mac (zenohd) のLAN IP。
+  // 使うときは: cp client.home.json5 client.json5
+  mode: "client",
+  connect: {
+    endpoints: [
+      "tcp/192.168.1.195:7447"
+    ]
+  }
+}

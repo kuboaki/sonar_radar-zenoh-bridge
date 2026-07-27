@@ -1,0 +1,15 @@
+{
+  // デモ会場用の実験ルーター(上流インターネット無し)。Mac (zenohd) のLAN IP。
+  // 使うときは: cp client.demo.json5 client.json5
+  //
+  // mDNS(.local)名での接続も試したが、Macが複数のネットワークインター
+  // フェースを持つ(マルチホーム)場合、無関係なインターフェースの
+  // リンクローカルアドレスに解決されてしまい機能しなかった。IP直書きに
+  // している。詳細は docs/development_log.md を参照。
+  mode: "client",
+  connect: {
+    endpoints: [
+      "tcp/192.168.11.2:7447"
+    ]
+  }
+}
