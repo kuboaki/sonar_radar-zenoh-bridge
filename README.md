@@ -80,9 +80,15 @@ sonar_radar-zenoh-bridge/
 ├── bridge/                    # 新設計に基づく実装(状態機械図を1状態ずつ実装しながら進める)
 │   ├── spikehat_timer.py      # ワンショットタイマー(C移植を見据えた関数シグネチャ)
 │   ├── broker.py              # PDU publish/受信を担う抽象層(hakoniwa_pdu_endpoint.Endpointのラップ)
-│   ├── sonar_radar_app.py     # ステートマシン本体。実装済み: INIT/WAIT_CALIBRATED/
-│   │                          # CALIBRATION_FAILED/TERMINATED、WAIT_FOR_START_PRESSへの到達まで
-│   └── run_calibration_smoke_test.py  # 上記を実際のZenoh経由で動作確認するスクリプト
+│   ├── sonar_radar_app.py     # ステートマシン本体。INIT〜SCANNING(到達まで)を実装済み
+│   ├── app_runner.py          # SonarRadarAppの構築・tickループ・state reportingの共通部分
+│   ├── real_hat.py            # 実機libspikehatのSpikeHat()構築(RealRadarBase/RealStarterで共有)
+│   ├── real_radar_base.py     # radar_base(旋回モーター)の実機実装(RealRadarBase)
+│   ├── real_starter.py        # starter(フォースセンサー)の実機実装(RealStarter)
+│   ├── hako_radar_base.py     # radar_baseのHakoniwa PDU実装(HakoRadarBase、MuJoCo plant経由)
+│   ├── hako_starter.py        # starterのHakoniwa PDU実装(HakoStarter、MuJoCo plant経由)
+│   ├── run_real.py            # 実機での動作確認エントリポイント(app_runnerを使用)
+│   └── run_hako.py            # MuJoCo(Hakoniwa plant)経由の動作確認エントリポイント(hakopy controller)
 └── driver/
     └── sonar_radar_zenoh.py   # 【旧, 使わない】sonar_radar の SonarRadarSM を import して
                                  # on_event/notify_*() で配線する転回前の実装。bridge/ に
@@ -107,7 +113,7 @@ sonar_radar-zenoh-bridge/
 
 | マシン | hakoniwa-pdu-endpoint | 状態 |
 |---|---|---|
-| Mac（このリポジトリの作業機） | Zenoh有効でビルド・`.local`インストール済み | `bridge/`のマイルストーン1(キャリブレーション)を単体・実機との2台構成の両方で動作確認済み |
+| Mac（このリポジトリの作業機） | Zenoh有効でビルド・`.local`インストール済み | `bridge/`単体・実機との2台構成でSCANNING到達まで動作確認済み。`hakoniwa-mujoco-robots`のMuJoCo plant(`sonar_radar_hako.py`)経由(`run_hako.py`)でも同様に確認済み(実機leader+Macシミュレータfollowerの2台構成含む) |
 | Raspberry Pi 4B+ (`192.168.11.3`, 実機, ホスト名`spike-hat`) | Zenoh有効でビルド・`.local`インストール済み | `sonar_radar-zenoh-bridge`を最新化し、Macとの2台構成でキャリブレーション・start協調動作を実ネットワーク越しに確認済み。実機の物理starterボタン、`radar_base`(旋回モーター)によるキャリブレーションの実接続も確認済み(`bridge/real_starter.py`/`bridge/real_radar_base.py`)。詳細は[`docs/development_log.md`](docs/development_log.md) |
 | Raspberry Pi 5 (`192.168.1.4`, Ubuntu 24.04 + ROS2 jazzy) | インストール済み（別トライアルで構築） | `sonar_radar-zenoh-bridge`は未クローン、`config/raspi5`も未着手。ブリッジ/モニタ役として今後着手する |
 
@@ -135,7 +141,9 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 `driver/sonar_radar_zenoh.py`（旧実装）自体の実行は未検証・今後使わない。かわりに`bridge/`配下の新実装は以下の手順で動作確認できる。
 
-### `bridge/` の動作確認（キャリブレーション部分、動作確認済み）
+`bridge/env.sh`は`hakoniwa_pdu_endpoint`用の環境変数(`PYTHONPATH`等)をまとめたもの。Pythonの実行環境自体は`sonar_radar/.venv`（Python 3.12, cffi対応）を流用している(`run_hako.py`のみ、hakopyとPythonバージョンを合わせる都合で`hakoniwa-mujoco-robots/.venv`のPython 3.14を使う。後述)。
+
+### `bridge/` の動作確認（単体、1プロセス自己ループバック）
 
 1. zenohdルーターを起動する（`config/mac/zenohd/router.json5`を使用。既に起動中なら不要）。
 
@@ -153,18 +161,58 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    python3 watch_state.py
    ```
 
-3. さらに別ターミナルで、キャリブレーション部分のスモークテストを実行する。
+3. さらに別ターミナルで、`run_real.py`を実行する（`--leader`を付けるとダミーのstarterで最後まで進む。付けなければキャリブレーション後`WAIT_FOR_START_PRESS`で待機したままタイムアウトする＝そこまでは正常）。
 
    ```bash
    cd ~/Projects/sonar_radar-zenoh-bridge/bridge
    source env.sh
    source ~/Projects/sonar_radar/.venv/bin/activate
-   python3 run_calibration_smoke_test.py
+   python3 run_real.py --leader --timeout 15
    ```
 
-   `watch_state.py`側のターミナルに `state -> WAIT_FOR_CALIBRATE` → `state -> CALIBRATING` → `state -> WAIT_FOR_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
+   `watch_state.py`側のターミナルに `state -> WAIT_FOR_CALIBRATE` → `state -> CALIBRATING` → `state -> WAIT_FOR_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` → `state -> WAIT_FOR_START_RELEASE` → `state -> WAIT_FOR_SCAN_START` → `state -> SCANNING` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
 
-`bridge/env.sh`は`hakoniwa_pdu_endpoint`用の環境変数(`PYTHONPATH`等)をまとめたもの。Pythonの実行環境自体は`sonar_radar/.venv`（Python 3.12, cffi対応）を流用している。
+   実機のハードウェアを使う場合は`--real-radar-base`（旋回モーター）・`--real-starter`（フォースセンサー）を付ける（Raspberry Pi上でのみ動作。Build HATは同時オープンをサポートしないため、両方を同時に指定した場合は`real_hat.py`が構築する単一の接続を共有する）。
+
+### `bridge/` をMuJoCoシミュレータ(Hakoniwa plant)経由で動かす
+
+**前提**: `hakoniwa-mujoco-robots`側の環境構築（`.python-version`をHomebrewの`python@3.14`に合わせ、`uv sync`で`.venv`を作る。`mujoco`だけでなく`bridge/`が使う`cffi`も必要）が済んでいること。詳細は`hakoniwa-mujoco-robots`リポジトリを参照。
+
+1. zenohdルーターを起動する（上と同じ）。
+
+2. Hakoniwa plant(MuJoCo本体、ビューア表示)を起動する。`SonarRadarAsset`の登録完了まで待つ。
+
+   ```bash
+   cd ~/Projects/hakoniwa-mujoco-robots
+   MJPYTHON="$(pwd)/.venv/bin/mjpython" bash run-hakopy.bash ~/Projects/sonar_radar/sim/sonar_radar_hako.py --viewer --debug
+   ```
+
+3. 別ターミナルで、`run_hako.py`をhakopy controllerとして登録する。`SonarRadarZenohBridgeController`の登録完了まで待つ（この時点ではまだZenohの購読は始まっていない）。
+
+   ```bash
+   cd ~/Projects/hakoniwa-mujoco-robots
+   source ~/Projects/sonar_radar-zenoh-bridge/bridge/env.sh
+   bash run-hakopy.bash ~/Projects/sonar_radar-zenoh-bridge/bridge/run_hako.py --origin 1 --leader --timeout 30
+   ```
+
+4. **さらに別ターミナルで`hako-cmd start`を実行する。ここで初めてrun_hako.pyのtickループ(broker.open()によるZenoh購読を含む)が動き出す。**
+
+   ```bash
+   hako-cmd start
+   ```
+
+   ビューアでレーダードームが回転し、`watch_state.py`(起動していれば)に状態遷移が表示されれば成功。
+
+### 実機とシミュレータの2台構成（重要: 起動順序）
+
+Zenohは「購読を開始した後に届いたpublish」しか受信できず、購読開始前のpublishは再送されない。そのため、**双方のbroker.open()(Zenoh購読)が、お互いの`calibrated`publishより先に完了している必要がある**。`run_real.py`は起動直後にbroker.open()するのに対し、`run_hako.py`はhakopy controllerとして登録されるだけで、`hako-cmd start`が呼ばれるまでbroker.open()しない。したがって次の順序を守ること。
+
+1. Mac: plantを起動する（上記の2）
+2. Mac: `run_hako.py`を起動する（上記の3、followerなら`--leader`は付けない）
+3. Mac: `hako-cmd start`を実行する（上記の4。ここでMac側の購読が始まる）
+4. 実機: `run_real.py --leader --real-starter --real-radar-base`を実行する（3の直後に。実機側の`calibrated`publishより、Mac側の購読が先に間に合う）
+
+`--participants`は両者で同じ集合（例: `--participants 2,5`、実機`--origin 2`・Mac`--origin 5`）を指定すること。この順序を守れば、followerであるMac側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
 
 ## 依存リポジトリ
 
@@ -180,14 +228,16 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 **実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中。進め方と教訓は[`docs/development_log.md`](docs/development_log.md)を参照）**
 
-2. [x] `bridge/` パッケージを新設。`INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(`bridge/run_calibration_smoke_test.py`)。
+2. [x] `bridge/` パッケージを新設。`INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(現`bridge/run_real.py`)。
 3. [x] 実機Raspberry Pi 4B+とMacの2台構成で、キャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
-4. [x] `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`（到達まで）を実装し、実機Raspberry Pi 4B+とMacの2台構成（デモ会場用の別ルーター経由）でstart協調動作を確認済み(`bridge/run_start_smoke_test.py`)。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+4. [x] `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`（到達まで）を実装し、実機Raspberry Pi 4B+とMacの2台構成（デモ会場用の別ルーター経由）でstart協調動作を確認済み(現`bridge/run_real.py`)。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 5. [x] `bridge/real_starter.py`(`RealStarter`)を新設し、擬似スイッチではなく実機のフォースセンサー(libspikehat)を直接使う`--real-starter`オプションを追加。実際に実機の物理ボタンを押して、実機・Macとも`SCANNING`まで到達することを確認済み。Build HATには準備完了を問い合わせるAPIが無いため、実際にセンサーが読めるようになるまでポーリングして待つ仕組みを実装した。
 6. [x] キャリブレーション処理自体が未実装だった設計上の欠落を修正（`WAIT_CALIBRATED`を`WAIT_FOR_CALIBRATE`/`CALIBRATING`/`WAIT_FOR_CALIBRATED`の3状態に分割）。`bridge/real_radar_base.py`(`RealRadarBase`)を新設し、擬似スタブではなく実機のモーター(libspikehat)を直接使う`--real-radar-base`オプションを追加。実際にモーターが機械的0位置→オフセット位置へホーミングし、`CALIBRATING`が完了することを実機で確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 7. [x] `sonar_radar` 本体（コミット`038ed15`）をrevert・push・実機pull済み（`19eccc5`）。あわせて実機での経過時間計測のためのタイムスタンプログ出力も追加・push済み（`74f374b`）。
-8. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
-9. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+8. [x] `bridge/hako_radar_base.py`(`HakoRadarBase`)を新設し、MuJoCo(Hakoniwa plant、`sonar_radar_hako.py`を無改造で使用)経由でradar_baseを駆動できるようにした。`real_radar_base.py`と同じく、`motor_run_to_position()`がブロッキング実装のため、`motor_pwm()`/`motor_get_position()`による非ブロッキングのtickベース駆動にしている。
+9. [x] `run_calibration_smoke_test.py`/`run_start_smoke_test.py`とそれぞれのhako版(計4本)を`run_real.py`/`run_hako.py`(共通部分は`app_runner.py`)に統合。個別に育って機能追加漏れ(`--real-radar-base`)が起きた反省から、SonarRadarAppの構築・tickループ・state reportingを1箇所に集約した。あわせて`bridge/hako_starter.py`(`HakoStarter`)を新設し、`real_radar_base.py`/`real_starter.py`がBuild HATへの接続を共有する形に修正(`real_hat.py`)。実機(leader)とMac(follower、シミュレータ)の2台構成で、followerがstarter操作なしで`start`受信のみ`SCANNING`へ直接遷移することを確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+10. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
+11. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
 
 ## ステータス
 
