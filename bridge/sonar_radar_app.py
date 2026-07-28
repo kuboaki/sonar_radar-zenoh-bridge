@@ -31,8 +31,9 @@ WAIT_FOR_CALIBRATED を通したタイムアウト秒数(設計文書の「timeo
 このステートマシンを持つクラスの属性（既定5秒）」に対応、コンストラクタで
 変更可能)。これは「準備が整いrun()が動き出してから、キャリブレーションが
 完了し相手のcalibratedが揃うのを待つ時間」であり、実機のBuild HAT等の
-ハードウェア初期化にかかる時間は含まない(初期化は broker.open() より前、
-run() が始まる前に完了させること)。タイマーの停止は成功経路では
+ハードウェア初期化にかかる時間は含まない(ハードウェア初期化は状態機械の
+モデル外であり、呼び出し側スクリプトの責務。broker.open()自体はINITの
+entryで行われ、ハードウェア初期化の完了を待たない)。タイマーの停止は成功経路では
 WAIT_FOR_CALIBRATED の exit、失敗経路(3状態いずれからのtimer_is_fired()
 でも)は CALIBRATION_FAILED の entry で行う。WAIT_FOR_CALIBRATED からの
 失敗経路だけexitとentryの両方でtimer_stop()が呼ばれる形になるが、
@@ -47,6 +48,7 @@ from typing import Callable, Optional, Set
 from broker import Broker
 from spikehat_timer import (
     spikehat_timer_create,
+    spikehat_timer_destroy,
     spikehat_timer_is_fired,
     spikehat_timer_reset,
     spikehat_timer_start,
@@ -70,6 +72,7 @@ class SonarRadarApp:
     def __init__(
         self,
         broker: Broker,
+        broker_config_path: str,
         calibration_participants: Set[int],
         is_leader: bool,
         starter_is_pushed: Optional[Callable[[], bool]] = None,
@@ -80,10 +83,17 @@ class SonarRadarApp:
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 5.0,
     ) -> None:
+        # brokerはコンストラクタで構築済み(集約、生成・破棄は呼び出し側の
+        # 責務)だが、まだopen()していないものを受け取る。open()はINITの
+        # entryで行う(broker.open()はイベント監視の開始そのものであり、
+        # 状態機械が担うべき処理のため)。
         self._broker = broker
+        self._broker_config_path = broker_config_path
         self._calibration_participants = calibration_participants
         self.is_leader = is_leader
-        self._timer = spikehat_timer_create()
+        # timerはこのクラスのコンポジション(生成・破棄ともこのクラスが担う)。
+        # 生成はINIT、破棄はTERMINATEDのentryで行う(_tick_init/_transition_to参照)。
+        self._timer = None
         self._state = State.INIT
         self._calibration_timeout_sec = calibration_timeout_sec
         self._starter_is_pushed_impl = starter_is_pushed or (lambda: False)
@@ -163,10 +173,17 @@ class SonarRadarApp:
             pass
 
     def _tick_init(self) -> None:
-        # entry: 初期化処理(calibration_participants取得、timer_create等)
-        # このアプリでは calibration_participants はコンストラクタ引数で
-        # 受け取り済み、timer もコンストラクタで作成済みのため、
-        # ここでは即座に自動遷移するのみ。
+        # entry: broker.open() → timer_create()
+        # calibration_participants はコンストラクタ引数で受け取り済み
+        # (副作用も他への依存も無い純粋なデータ設定のため、コンストラクタで
+        # 済ませてよい)。broker.open()とtimer_create()は、それぞれ副作用
+        # (I/O・リソース確保)を持つ本当の意味でのアクションなので、ここに
+        # 明示する。broker.open()はハードウェア初期化(実機のBuild HAT等)を
+        # 待たない(そちらは呼び出し側スクリプトの責務でモデル外、待って
+        # しまうとイベント監視の開始が遅れ、先に届いた相手のcalibrated等を
+        # 取りこぼす)。
+        self._broker.open(self._broker_config_path)
+        self._timer = spikehat_timer_create()
         self._transition_to(State.WAIT_FOR_CALIBRATE)
 
     def _tick_wait_for_calibrate(self) -> None:
@@ -248,4 +265,6 @@ class SonarRadarApp:
             self._broker.publish_start()  # entry
             self.timer_start(2.0)  # entry
         elif new_state is State.TERMINATED:
+            self._broker.close()  # entry
+            spikehat_timer_destroy(self._timer)  # entry
             print("[sonar_radar_app] entry: 終了処理")

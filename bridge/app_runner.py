@@ -87,11 +87,15 @@ def run_app(
     """
     _warn_if_legacy_driver_running()
 
+    # brokerの構築のみここで行う。open()はSonarRadarApp自身がINITのentryで
+    # 行う(イベント監視の開始は状態機械が担うべき処理であり、ハードウェア
+    # 初期化(呼び出し側スクリプトの責務、この時点で既に完了しているはず)を
+    # 待たずに済むよう、なるべく早く開始できるようにするため)。
     broker = Broker(f"sonar_radar_zenoh_bridge_{prefix}_{origin}", origin)
-    broker.open(config_path)
 
     app = SonarRadarApp(
         broker=broker,
+        broker_config_path=config_path,
         calibration_participants=participants,
         is_leader=is_leader,
         starter_is_pushed=starter_is_pushed,
@@ -105,7 +109,15 @@ def run_app(
 
     def _report(state: State) -> None:
         console_report(state.value, prefix=prefix)
-        broker.publish_state(state.value)
+        # publish_state()は観測用の追加機能(コア設計の一部ではない)。
+        # TERMINATED自身のentryでbroker.close()が先に実行されるため、
+        # TERMINATEDへの遷移を報告する時点では既にbrokerが閉じている。
+        # 観測手段の都合でコア設計(entryでのclose())を歪めないよう、
+        # ここでの送信失敗は無視する。
+        try:
+            broker.publish_state(state.value)
+        except Exception as e:
+            print(f"[{prefix}] (state publish skipped: {e})", file=sys.stderr)
 
     with_state_change_reporting(app, _report)
 
@@ -124,7 +136,12 @@ def run_app(
             sleep(tick_interval_sec)
             elapsed += tick_interval_sec
     finally:
-        broker.close()
+        # 正常にTERMINATEDへ到達した場合は、SonarRadarApp自身が
+        # TERMINATEDのentryでbroker.close()を既に行っている(exitと
+        # entryの二重close()を避けるため、未到達=タイムアウト時のみ
+        # ここで安全網としてclose()する)。
+        if not app.is_terminated():
+            broker.close()
 
     if app.is_terminated():
         print(f"[{prefix}] OK: is_terminated() に到達しました", file=sys.stderr)
