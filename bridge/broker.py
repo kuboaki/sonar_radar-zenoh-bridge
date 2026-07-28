@@ -83,11 +83,15 @@ class Broker:
     def publish_state(self, state_name: str) -> None:
         """状態遷移を外部から観測できるようにする(designed APIには無い、観測用の追加メソッド)。
 
-        pdu/pdutypes.json の state チャンネル(32バイト固定)へ、状態名をUTF-8で
-        publishする。zenohdのREST/storage_manager経由(curl http://localhost:8000/radar/dome/state)
-        や bridge/watch_state.py で受信・表示できる。
+        pdu/pdutypes.json の state チャンネル(32バイト固定)へ、
+        "{origin}:{状態名}" をUTF-8でpublishする。全originが同じ1つの
+        チャンネルを共有するため、どのマシン(origin)の遷移かを区別
+        できるようにoriginを含めている。zenohdのREST/storage_manager
+        経由(curl http://localhost:8000/radar/dome/state)や
+        bridge/watch_state.py で受信・表示できる。
         """
-        payload = state_name.encode("utf-8")[:_STATE_PDU_SIZE].ljust(_STATE_PDU_SIZE, b"\x00")
+        text = f"{self._origin}:{state_name}"
+        payload = text.encode("utf-8")[:_STATE_PDU_SIZE].ljust(_STATE_PDU_SIZE, b"\x00")
         self._endpoint.send_by_name(PduKey(robot=_ROBOT, pdu="state"), payload)
 
     # --- consume系 (ポーリング、一度だけtrueを返し内部フラグをクリア) ---

@@ -39,9 +39,13 @@ def main() -> int:
     endpoint.post_start()
 
     def _on_recv(_key, payload: bytes) -> None:
-        state_name = payload.rstrip(b"\x00").decode("utf-8", errors="replace")
+        text = payload.rstrip(b"\x00").decode("utf-8", errors="replace")
+        # broker.publish_state()は"{origin}:{状態名}"の形式でpublishする。
+        # 全originが同じチャンネルを共有するため、originを表示して
+        # どのマシンの遷移かを区別できるようにする。
+        origin, _, state_name = text.partition(":")
         now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        console_report(state_name, prefix=now)
+        console_report(state_name or text, prefix=f"{now} origin={origin}")
 
     endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="state"), _on_recv)
 

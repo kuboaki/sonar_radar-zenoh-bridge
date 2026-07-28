@@ -152,14 +152,16 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    zenohd -c router.json5
    ```
 
-2. 別ターミナルで、状態遷移を監視するwatchスクリプトを起動しておく（推奨。任意のタイミングで起動・終了してよい）。
+2. 別ターミナルで、状態遷移を監視するwatchスクリプトを起動しておく（推奨。任意のタイミングで起動・終了してよい）。**`2>/dev/null`を必ず付けること** — 付けないとhakoniwa_pdu_endpointライブラリの`WARNING: No subscribers found...`が大量にstderrへ出て、肝心の状態遷移が埋もれる。
 
    ```bash
    cd ~/Projects/sonar_radar-zenoh-bridge/bridge
    source env.sh
    source ~/Projects/sonar_radar/.venv/bin/activate
-   python3 watch_state.py
+   python3 watch_state.py 2>/dev/null
    ```
+
+   `run_real.py`/`run_hako.py`側の出力にも同じ`WARNING`が混ざるので、状態を確認したいときはこの`watch_state.py`側のターミナルだけを見ればよい。1台構成でも2台構成でも、同じzenohdに繋がっていれば全origin(マシン)の状態遷移がここに集まる。
 
 3. さらに別ターミナルで、`run_real.py`を実行する（`--leader`を付けるとダミーのstarterで最後まで進む。付けなければキャリブレーション後`WAIT_FOR_START_PRESS`で待機したままタイムアウトする＝そこまでは正常）。
 
@@ -170,7 +172,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    python3 run_real.py --leader --timeout 15
    ```
 
-   `watch_state.py`側のターミナルに `state -> WAIT_FOR_CALIBRATE` → `state -> CALIBRATING` → `state -> WAIT_FOR_CALIBRATED` → `state -> WAIT_FOR_START_PRESS` → `state -> WAIT_FOR_START_RELEASE` → `state -> WAIT_FOR_SCAN_START` → `state -> SCANNING` と時刻つきで表示されれば成功。`zenohd`のREST経由でも状態を直接確認できる（`curl http://localhost:8000/radar/dome/state`）。
+   `watch_state.py`側のターミナルに `[origin=1] WAIT_FOR_CALIBRATE` → `CALIBRATING` → `WAIT_FOR_CALIBRATED` → `WAIT_FOR_START_PRESS` → `WAIT_FOR_START_RELEASE` → `WAIT_FOR_SCAN_START` → `SCANNING` と時刻・origin付きで表示されれば成功。2台構成なら、両方のoriginの行が交互に(お互いのcalibrated受信を待ち合わせながら)進むのが見える。`zenohd`のREST経由でも直近の値だけは確認できる（`curl http://localhost:8000/radar/dome/state`。ただし全originで1つの値を共有するため直近の1件しか分からず、経過や区別を追うにはwatch_state.pyを使うこと）。
 
    実機のハードウェアを使う場合は`--real-radar-base`（旋回モーター）・`--real-starter`（フォースセンサー）を付ける（Raspberry Pi上でのみ動作。Build HATは同時オープンをサポートしないため、両方を同時に指定した場合は`real_hat.py`が構築する単一の接続を共有する）。
 
@@ -213,6 +215,8 @@ Zenohは「購読を開始した後に届いたpublish」しか受信できず�
 4. 実機: `run_real.py --leader --real-starter --real-radar-base`を実行する（3の直後に。実機側の`calibrated`publishより、Mac側の購読が先に間に合う）
 
 `--participants`は両者で同じ集合（例: `--participants 2,5`、実機`--origin 2`・Mac`--origin 5`）を指定すること。この順序を守れば、followerであるMac側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
+
+2台構成では、Mac側で`watch_state.py 2>/dev/null`をもう1つのターミナルで動かしておくと、両machineの状態遷移が`[origin=2] ...`/`[origin=5] ...`として1箇所にまとまって表示されるので、どちらが今どの状態か、お互いの`calibrated`/`start`を受信できているか(=交互にほぼ同じタイミングで状態が進むか)を1つのターミナルだけで確認できる。
 
 ## 依存リポジトリ
 
