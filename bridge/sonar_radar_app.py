@@ -224,6 +224,13 @@ class SonarRadarApp:
         self._broker.publish_scan(angle=0, distance_mm=distance_mm)
         # MARKER_DETECTED/WAIT_FOR_INVERT/stop対称処理/SCAN_FAILEDは
         # 次のマイルストーンで実装。
+        #
+        # 【実装作業の便法、図には対応する遷移なし】SCANNINGから出る本来の
+        # 遷移(stop対称処理等)が未実装の間、is_terminated()でtickループを
+        # 終了できるようにするための暫定処置として、doを1回実行したら
+        # 無条件にTERMINATEDへ遷移する。次のマイルストーンでSCANNINGから
+        # 出る遷移を実装するときは、この行を削除し、その遷移に置き換える。
+        self._transition_to(State.TERMINATED)
 
     def _transition_to(self, new_state: State) -> None:
         self._state = new_state

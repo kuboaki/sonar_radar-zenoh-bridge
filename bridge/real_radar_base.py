@@ -1,10 +1,8 @@
 """real_radar_base — 実機libspikehatのradar_base(旋回モーター)を使う実装。
 
-real_starter.py と同じ設計方針: sonar_radar-zenoh-bridge は sonar_radar
-(アプリ本体)を import しないが、ハードウェア抽象化ライブラリである
-libspikehat だけは直接使う。ファームウェアロード・パス解決の手順も
-real_starter.py と共通(重複コードだが、各ハードウェアラッパーが
-自己完結する方を優先した)。
+Build HATは複数の同時オープンをサポートしないため、spikehat.SpikeHat()の
+構築はreal_hat.create_real_hat()に一本化し、real_starter.RealStarterと
+共有する(呼び出し側がhatを1つだけ作って両方に渡す)。
 
 キャリブレーション(機械的0位置への復帰 → SENSOR_HOME_OFFSET分の補正)は
 sonar_radar/raspi/sonar_radar.py の CALIB_TO_ZERO/CALIB_TO_OFFSET と
@@ -21,59 +19,31 @@ calibrate()を1回呼んだら、is_calibrated()を毎tickポーリングする�
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
-
-def _resolve_libspikehat_python_dir() -> str:
-    root = os.environ.get("SONAR_RADAR_ROOT")
-    if not root:
-        here = os.path.dirname(os.path.abspath(__file__))
-        root = os.path.join(here, "..", "..", "sonar_radar")
-    lib_dir = os.path.join(os.path.realpath(root), "raspi", "libspikehat", "python")
-    if not os.path.isdir(lib_dir):
-        raise RuntimeError(
-            f"libspikehatのPythonバインディングが見つかりません: {lib_dir}\n"
-            "SONAR_RADAR_ROOT環境変数でsonar_radarリポジトリのルートを指定してください。"
-        )
-    return lib_dir
-
-
-def _load_buildhat_firmware() -> None:
-    print("[real_radar_base] Build HATファームウェアをロード中...")
-    subprocess.run(
-        [sys.executable, "-c", "from buildhat import Motor; Motor('A')"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
 _TOLERANCE_DEG = 3  # sonar_radar.py の _drive_to と同じ許容誤差
 
 
 class RealRadarBase:
-    """実機のradar_base(旋回モーター)を使う。sonar_radar::unit::radar_baseに相当。"""
+    """実機のradar_base(旋回モーター)を使う。sonar_radar::unit::radar_baseに相当。
+
+    hatはreal_hat.create_real_hat()で構築したspikehat.SpikeHat()を渡す
+    (real_starter.RealStarterと同じhatを共有する想定)。
+    """
 
     def __init__(
         self,
+        hat,
         port: int = 0,
         align_speed: int = 10,
         gear_ratio: int = 3,
         sensor_home_offset_deg: int = 5,
     ) -> None:
-        _load_buildhat_firmware()
-
-        lib_dir = _resolve_libspikehat_python_dir()
-        if lib_dir not in sys.path:
-            sys.path.insert(0, lib_dir)
-        import spikehat  # noqa: E402  (パス解決後にimportする必要があるため)
+        import spikehat  # real_hat.create_real_hat()でパス解決済みの前提
 
         self._port = port
         self._align_speed = align_speed
         # dome_to_motor(sensor_home_offset_deg) と同じ換算(sonar_radar.py参照)
         self._offset_deg = round(-sensor_home_offset_deg * gear_ratio)
-        self._hat = spikehat.SpikeHat()
+        self._hat = hat
         self._hat.port_config(self._port, spikehat.DEVICE_MOTOR_L)
         self._stage: str | None = None  # None→未開始, "to_zero", "to_offset", "done"
         self.zero_pos = 0
@@ -109,6 +79,3 @@ class RealRadarBase:
 
     def invert_direction(self) -> None:
         raise NotImplementedError("次のマイルストーン(MARKER_DETECTED以降)で実装")
-
-    def close(self) -> None:
-        self._hat.close()
