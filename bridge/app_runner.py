@@ -17,6 +17,7 @@ sleep には time.sleep(実機・スタブ用)か hako_hat.sleep(シミュレー
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from typing import Callable, Optional, Set
 
@@ -25,6 +26,33 @@ from console_report import console_report
 from sonar_radar_app import SonarRadarApp, State
 from state_reporter import with_state_change_reporting
 
+# 旧driver/sonar_radar_zenoh.py(READMEで「旧・使わない」と明記)が動いた
+# まま気づかれず、4日間ノイズを出し続けていた事故があった。同じ理由の
+# 再発に気づけるよう、run_app()の最初で毎回チェックする。
+_LEGACY_DRIVER_PATTERN = "sonar_radar_zenoh.py"
+
+
+def _warn_if_legacy_driver_running() -> None:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", _LEGACY_DRIVER_PATTERN],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return  # pgrepが無い環境などでは静かに諦める(この確認は無くても動作に支障ない)
+
+    pids = result.stdout.split()
+    if not pids:
+        return
+
+    print(
+        f"\x1b[7m\x1b[31;1m[app_runner] 警告: 旧driver/sonar_radar_zenoh.py が動いたままです "
+        f"(pid={','.join(pids)})。同じzenohdへノイズを送り続けている可能性があります。"
+        f"bridge/cleanup.bash で停止してから確認してください。\x1b[0m",
+        file=sys.stderr,
+    )
 
 
 def run_app(
@@ -57,6 +85,8 @@ def run_app(
     終端に達した)、overall_timeout_secに達してもまだ待ち状態のままなら
     1(=何も届かず/完了せず時間切れ)。
     """
+    _warn_if_legacy_driver_running()
+
     broker = Broker(f"sonar_radar_zenoh_bridge_{prefix}_{origin}", origin)
     broker.open(config_path)
 

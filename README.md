@@ -169,6 +169,15 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
    **注意**: `driver/sonar_radar_zenoh.py`(旧実装、使わない)を過去に起動したまま放置していないか、`ps aux | grep sonar_radar`で必ず確認すること。同じzenohdに向けて動いたままだと、`scan`/`detected`等のノイズが混ざり続け、正常に動いているかの判断を誤らせる（実際に数日放置されたまま気づかず、この文書化のきっかけになった）。
 
+   デモの中断等で関連プロセスが残ることがあるため、`bridge/cleanup.bash`で一括確認・停止できる(Mac・実機どちらでも同じスクリプトが使える。2台構成なら両方の機で実行すること)。
+
+   ```bash
+   bash bridge/cleanup.bash --dry-run  # 見つけたプロセスを表示するだけ
+   bash bridge/cleanup.bash            # 見つけたプロセスを停止する
+   ```
+
+   気づくきっかけとして、`run_real.py`/`run_hako.py`は起動のたびに旧`driver/sonar_radar_zenoh.py`が動いていないか自動チェックし、見つかれば赤字で警告する(`app_runner.py`の`_warn_if_legacy_driver_running()`)。
+
    `run_real.py`/`run_hako.py`側の出力にも同じ`WARNING`が混ざるので、状態を確認したいときはこの`watch_state.py`側のターミナルだけを見ればよい。1台構成でも2台構成でも、同じzenohdに繋がっていれば全origin(マシン)の状態遷移がここに集まる。
 
 3. さらに別ターミナルで、`run_real.py`を実行する（`--leader`を付けるとダミーのstarterで最後まで進む。付けなければキャリブレーション後`WAIT_FOR_START_PRESS`で待機したままタイムアウトする＝そこまでは正常）。
