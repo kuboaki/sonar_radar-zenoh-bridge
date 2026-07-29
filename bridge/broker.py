@@ -7,18 +7,14 @@ broker クラスの実装。実体は hakoniwa_pdu_endpoint.c_endpoint.Endpoint
 受信はZenohの非同期コールバックだが、内部でフラグ化し、
 consume_*_received() はポーリングで一度だけtrueを返して内部フラグを
 クリアする(旧 driver/sonar_radar_zenoh.py の notify_*()と同じ考え方)。
-calibrated は他のトリガーと違いorigin単位の到達確認が必要なため、
-is_calibrated_received_from(origin) で問い合わせる
-(calibration_participants自体はブローカーではなくアプリ側が保持する)。
 
-start/stop/detected/calibrated のいずれも、自分のpublishが自分に
+start/stop/detected のいずれも、自分のpublishが自分に
 ループバックしてくることを特別扱いしない
 (docs/zenoh_state_machine_design.md の設計方針どおり)。
 
-【この実装で designed API に追加したもの】
-consume_calibrate_received() は Astah のクラス図には無いメソッド。
-sonar_radar_app.SonarRadarApp の WAIT_FOR_CALIBRATE から CALIBRATING への
-遷移判定(radar/dome/calibrateを受信した)に使う。
+calibrate/calibratedのマシン間協調は廃止したため、このクラスは
+扱わない(経緯はdocs/zenoh_state_machine_design.md
+「背景: キャリブレーション協調の廃止」参照)。
 """
 
 from __future__ import annotations
@@ -39,18 +35,14 @@ class Broker:
         self._origin_bytes = origin.to_bytes(1, "big")
         self._endpoint = Endpoint(name, "inout")
         self._lock = threading.Lock()
-        self._calibrate_received = False
         self._start_received = False
         self._stop_received = False
         self._detected_received = False
-        self._calibrated_origins: set[int] = set()
 
     def open(self, config_path: str) -> None:
         self._endpoint.open(config_path)
         self._endpoint.start()
         self._endpoint.post_start()
-        self._subscribe("calibrate", self._on_calibrate)
-        self._subscribe("calibrated", self._on_calibrated)
         self._subscribe("start", self._on_start)
         self._subscribe("stop", self._on_stop)
         self._subscribe("detected", self._on_detected)
@@ -60,12 +52,6 @@ class Broker:
         self._endpoint.close()
 
     # --- publish系 ---
-
-    def publish_calibrate(self) -> None:
-        self._publish("calibrate")
-
-    def publish_calibrated(self) -> None:
-        self._publish("calibrated")
 
     def publish_start(self) -> None:
         self._publish("start")
@@ -96,11 +82,6 @@ class Broker:
 
     # --- consume系 (ポーリング、一度だけtrueを返し内部フラグをクリア) ---
 
-    def consume_calibrate_received(self) -> bool:
-        with self._lock:
-            v, self._calibrate_received = self._calibrate_received, False
-            return v
-
     def consume_start_received(self) -> bool:
         with self._lock:
             v, self._start_received = self._start_received, False
@@ -116,10 +97,6 @@ class Broker:
             v, self._detected_received = self._detected_received, False
             return v
 
-    def is_calibrated_received_from(self, origin: int) -> bool:
-        with self._lock:
-            return origin in self._calibrated_origins
-
     # --- 内部 ---
 
     def _publish(self, pdu_name: str) -> None:
@@ -130,15 +107,6 @@ class Broker:
             on_recv(payload)
 
         self._endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu=pdu_name), _cb)
-
-    def _on_calibrate(self, _payload: bytes) -> None:
-        with self._lock:
-            self._calibrate_received = True
-
-    def _on_calibrated(self, payload: bytes) -> None:
-        origin = payload[0]
-        with self._lock:
-            self._calibrated_origins.add(origin)
 
     def _on_start(self, _payload: bytes) -> None:
         with self._lock:

@@ -10,8 +10,6 @@
         {
           "name": "Radar",
           "pdu": [
-            { "name": "calibrate",  "notify_on_recv": true },
-            { "name": "calibrated", "notify_on_recv": true },
             { "name": "start",      "notify_on_recv": true },
             { "name": "stop",       "notify_on_recv": true },
             { "name": "detected",   "notify_on_recv": true },

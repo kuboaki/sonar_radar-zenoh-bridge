@@ -6,7 +6,7 @@ run_start_smoke_test.py がキャリブレーション完了後にstart協調ま
 上位互換だったため、2本に分ける理由が無かった(片方への機能追加を
 もう片方に反映し忘れる事故が実際に起きたため統合した)。
 
-INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED →
+INIT → CALIBRATING(ローカルのみ、マシン間協調なし) →
 WAIT_FOR_START_PRESS → (leaderのみ: WAIT_FOR_START_RELEASE →
 WAIT_FOR_SCAN_START →) SCANNING を、実際のZenoh経由のpublish/受信で
 確認する。followerはstarterの操作なしで、radar/starter/startを
@@ -50,18 +50,10 @@ class _FakeStarter:
         return self._press_after <= elapsed < self._press_after + self._hold
 
 
-def _parse_participants(text: str) -> set:
-    return {int(v) for v in text.split(",") if v.strip()}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="実機での動作確認スクリプト")
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
-    parser.add_argument(
-        "--participants", default=None,
-        help="calibration_participantsのカンマ区切り(例: 1,2)。省略時は自分のoriginのみ",
-    )
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
     parser.add_argument(
         "--real-radar-base", action="store_true",
@@ -77,15 +69,14 @@ def main() -> int:
     )
     parser.add_argument("--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数")
     parser.add_argument(
-        "--calibration-timeout", type=float, default=5.0,
-        help="CALIBRATING系のタイムアウト秒数(既定5秒)。ハードウェア初期化が完了し"
-        "動作可能になってから、相手のcalibratedが揃うのを待つ時間(ハードウェア初期化の"
-        "時間そのものは含まない。broker.open()はhardware_initialize()より前にINITの"
-        "entryで行われるため、初期化中も相手からの受信は取りこぼさない)",
+        "--calibration-timeout", type=float, default=20.0,
+        help="CALIBRATING(ローカルなハードウェアキャリブレーション)のタイムアウト秒数"
+        "(既定20秒)。物理的にモーターが固着している等、ローカルなハードウェア障害を"
+        "検出するためのもので、マシン間の協調待ちではない(ハードウェア初期化の時間"
+        "そのものは含まない。broker.open()はhardware_initialize()より前にINITの"
+        "entryで行われるため、初期化中もstart/stop/detected等の受信は取りこぼさない)",
     )
     args = parser.parse_args()
-
-    participants = _parse_participants(args.participants) if args.participants else {args.origin}
 
     # ハードウェア初期化(特にBuild HATのファームウェアロード、数十秒かかる
     # ことがある)は、SonarRadarAppのINITのentry(broker.open()の後)で
@@ -133,7 +124,6 @@ def main() -> int:
             prefix="real",
             config_path=args.config,
             origin=args.origin,
-            participants=participants,
             is_leader=args.leader,
             sleep=time.sleep,
             tick_interval_sec=_TICK_INTERVAL_SEC,

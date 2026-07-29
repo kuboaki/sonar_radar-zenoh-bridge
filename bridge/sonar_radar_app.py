@@ -2,48 +2,39 @@
 
 docs/zenoh_state_machine_design.md 記載のステートマシン図
 (sonar_radar::runのステートマシン図)を、状態名・イベント名を
-そのままコードの識別子として1:1で実装したもの
-(docs/zenoh_state_machine_design.md の「どう生成するか」の議論での
-「手作業だが規約で縛る」方式)。
+そのままコードの識別子として1:1で実装したもの。
 
-マイルストーン1で実装済み: INIT / WAIT_FOR_CALIBRATE / CALIBRATING /
-WAIT_FOR_CALIBRATED / CALIBRATION_FAILED / TERMINATED。
-マイルストーン2で追加: WAIT_FOR_START_PRESS / WAIT_FOR_START_RELEASE /
-WAIT_FOR_SCAN_START / SCANNING(到達まで)。押下→解放→start協調が
-このマイルストーンの範囲。MARKER_DETECTED以降(detected対称処理、
-WAIT_FOR_INVERT、stop対称処理、SCAN_FAILED)は次のマイルストーンで着手。
+INIT(broker.open() → hardware_initialize() → timer_create())から
+CALIBRATING(ローカルなハードウェアキャリブレーションのみ、マシン間の
+通信協調は無し)までを、人が起動してから完了するまで1つの流れに閉じ込め、
+完了したら自動的にWAIT_FOR_START_PRESSへ遷移する。マシン間の
+calibrate/calibrated協調は廃止した(各machineが独立してキャリブレーション
+を完了させる設計に転回したため。経緯はdocs/zenoh_state_machine_design.md
+「背景: キャリブレーション協調の廃止」参照)。
 
-radar/dome/calibrate を受信してから実際にキャリブレーションを実施する
-までを CALIBRATING で表す(entry で radar_base_calibrate() を呼び、
-完了は radar_base_is_calibrated() を毎tickポーリングして判定する。
-starter_is_pushed() 等と同じ「レベルトリガーをイベント扱いする」書き方)。
-モーターホーミング等、完了に時間がかかる処理を想定しており、
-calibrate() 自体は非同期(駆動開始のみ)である前提。
+CALIBRATING: entryでradar_base_calibrate()を呼び(モーターホーミング等、
+完了に時間がかかる処理を想定。calibrate()自体は駆動開始のみで即座に
+返る非同期呼び出し前提)、完了はradar_base_is_calibrated()を毎tick
+ポーリングして判定する(starter_is_pushed()等と同じ「レベルトリガーを
+イベント扱いする」書き方)。exitでtimer_stop()を呼ぶ(「CALIBRATINGで
+なくなったら止める」という本来の意味論のため、CALIBRATION_FAILEDの
+entry側では呼ばない)。
+
+CALIBRATION_FAILEDは、マシン間協調の失敗ではなく、ローカルなハードウェア
+障害(物理的にモーターが固着している等)専用。タイムアウトは20秒
+(calibration_timeout_sec、コンストラクタで変更可能)。
 
 starter_is_pushed()/marker_detector_is_detected()/
 radar_base_invert_direction()/radar_base_calibrate()/
 radar_base_is_calibrated()/scanner_get_distance() は、実ハードウェア
 (libspikehat)がまだこの層に接続されていないため、コンストラクタで
 注入可能にしている(未指定時はfalse/no-op/0を返す安全なスタブ)。
-
-calibration_timeout_sec は WAIT_FOR_CALIBRATE / CALIBRATING /
-WAIT_FOR_CALIBRATED を通したタイムアウト秒数(設計文書の「timeout秒数は
-このステートマシンを持つクラスの属性（既定5秒）」に対応、コンストラクタで
-変更可能)。これは「準備が整いrun()が動き出してから、キャリブレーションが
-完了し相手のcalibratedが揃うのを待つ時間」であり、実機のBuild HAT等の
-ハードウェア初期化にかかる時間は含まない(ハードウェア初期化は状態機械の
-モデル外であり、呼び出し側スクリプトの責務。broker.open()自体はINITの
-entryで行われ、ハードウェア初期化の完了を待たない)。タイマーの停止は成功経路では
-WAIT_FOR_CALIBRATED の exit、失敗経路(3状態いずれからのtimer_is_fired()
-でも)は CALIBRATION_FAILED の entry で行う。WAIT_FOR_CALIBRATED からの
-失敗経路だけexitとentryの両方でtimer_stop()が呼ばれる形になるが、
-spikehat_timer_reset()は冪等(何度呼んでも安全)なので問題ない。
 """
 
 from __future__ import annotations
 
 import enum
-from typing import Callable, Optional, Set
+from typing import Callable, Optional
 
 from broker import Broker
 from spikehat_timer import (
@@ -57,9 +48,7 @@ from spikehat_timer import (
 
 class State(enum.Enum):
     INIT = "INIT"
-    WAIT_FOR_CALIBRATE = "WAIT_FOR_CALIBRATE"
     CALIBRATING = "CALIBRATING"
-    WAIT_FOR_CALIBRATED = "WAIT_FOR_CALIBRATED"
     CALIBRATION_FAILED = "CALIBRATION_FAILED"
     WAIT_FOR_START_PRESS = "WAIT_FOR_START_PRESS"
     WAIT_FOR_START_RELEASE = "WAIT_FOR_START_RELEASE"
@@ -73,7 +62,6 @@ class SonarRadarApp:
         self,
         broker: Broker,
         broker_config_path: str,
-        calibration_participants: Set[int],
         is_leader: bool,
         hardware_initialize: Optional[Callable[[], None]] = None,
         starter_is_pushed: Optional[Callable[[], bool]] = None,
@@ -82,7 +70,7 @@ class SonarRadarApp:
         radar_base_calibrate: Optional[Callable[[], None]] = None,
         radar_base_is_calibrated: Optional[Callable[[], bool]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
-        calibration_timeout_sec: float = 5.0,
+        calibration_timeout_sec: float = 20.0,
     ) -> None:
         # brokerはコンストラクタで構築済み(集約、生成・破棄は呼び出し側の
         # 責務)だが、まだopen()していないものを受け取る。open()はINITの
@@ -90,7 +78,6 @@ class SonarRadarApp:
         # 状態機械が担うべき処理のため)。
         self._broker = broker
         self._broker_config_path = broker_config_path
-        self._calibration_participants = calibration_participants
         self.is_leader = is_leader
         # timerはこのクラスのコンポジション(生成・破棄ともこのクラスが担う)。
         # 生成はINIT、破棄はTERMINATEDのentryで行う(_tick_init/_transition_to参照)。
@@ -121,13 +108,6 @@ class SonarRadarApp:
 
     def hardware_initialize(self) -> None:
         self._hardware_initialize_impl()
-
-    def check_calibration_participants(self) -> bool:
-        """すべての参加者がキャリブレーション実行の応答を返したかチェックする。"""
-        return all(
-            self._broker.is_calibrated_received_from(origin)
-            for origin in self._calibration_participants
-        )
 
     def starter_is_pushed(self) -> bool:
         return bool(self._starter_is_pushed_impl())
@@ -163,12 +143,8 @@ class SonarRadarApp:
     def run(self) -> None:
         if self._state is State.INIT:
             self._tick_init()
-        elif self._state is State.WAIT_FOR_CALIBRATE:
-            self._tick_wait_for_calibrate()
         elif self._state is State.CALIBRATING:
             self._tick_calibrating()
-        elif self._state is State.WAIT_FOR_CALIBRATED:
-            self._tick_wait_for_calibrated()
         elif self._state is State.CALIBRATION_FAILED:
             self._tick_calibration_failed()
         elif self._state is State.WAIT_FOR_START_PRESS:
@@ -184,18 +160,16 @@ class SonarRadarApp:
 
     def _tick_init(self) -> None:
         # entry: broker.open() → hardware_initialize() → timer_create()
-        # calibration_participants はコンストラクタ引数で受け取り済み
-        # (副作用も他への依存も無い純粋なデータ設定のため、コンストラクタで
-        # 済ませてよい)。broker.open()/hardware_initialize()/timer_create()は
+        # broker.open()/hardware_initialize()/timer_create()は
         # それぞれ副作用(I/O・リソース確保)を持つ本当の意味でのアクション
         # なので、ここに明示する。
         #
         # broker.open()を先に行うのは、その後のhardware_initialize()が
         # (実機ではBuild HATのファームウェアロード等で)ブロッキングして
         # 時間がかかっても、Zenohの受信は内部スレッドが非同期に処理する
-        # ため、その間に相手から届いたcalibrated等を取りこぼさないため。
-        # broker.open()さえ済んでいれば、hardware_initialize()がどれだけ
-        # 遅くても購読は生きているので、新しい状態やスレッドを増やす必要はない。
+        # ため、その間に届くstart/stop/detected等を取りこぼさないため
+        # (calibrate/calibratedのマシン間協調は廃止したため、この時点では
+        # 特に待つ相手はいない)。
         #
         # hardware_initialize()の中身は実機とシミュレータで中身も外見も
         # 異なる(実機: ファームウェアロード等の複数手順・ブロッキング、
@@ -205,24 +179,10 @@ class SonarRadarApp:
         self._broker.open(self._broker_config_path)
         self.hardware_initialize()
         self._timer = spikehat_timer_create()
-        self._transition_to(State.WAIT_FOR_CALIBRATE)
-
-    def _tick_wait_for_calibrate(self) -> None:
-        if self._broker.consume_calibrate_received():
-            self._transition_to(State.CALIBRATING)
-            return
-        if self.timer_is_fired():
-            self._transition_to(State.CALIBRATION_FAILED)
+        self._transition_to(State.CALIBRATING)
 
     def _tick_calibrating(self) -> None:
         if self.radar_base_is_calibrated():
-            self._transition_to(State.WAIT_FOR_CALIBRATED)
-            return
-        if self.timer_is_fired():
-            self._transition_to(State.CALIBRATION_FAILED)
-
-    def _tick_wait_for_calibrated(self) -> None:
-        if self.check_calibration_participants():
             self.timer_stop()  # exit
             self._transition_to(State.WAIT_FOR_START_PRESS)
             return
@@ -272,15 +232,10 @@ class SonarRadarApp:
 
     def _transition_to(self, new_state: State) -> None:
         self._state = new_state
-        if new_state is State.WAIT_FOR_CALIBRATE:
-            self._broker.publish_calibrate()  # entry
-            self.timer_start(self._calibration_timeout_sec)  # entry
-        elif new_state is State.CALIBRATING:
+        if new_state is State.CALIBRATING:
             self.radar_base_calibrate()  # entry
-        elif new_state is State.WAIT_FOR_CALIBRATED:
-            self._broker.publish_calibrated()  # entry
+            self.timer_start(self._calibration_timeout_sec)  # entry
         elif new_state is State.CALIBRATION_FAILED:
-            self.timer_stop()  # entry
             print("[sonar_radar_app] entry: キャリブレーション失敗を通知")
         elif new_state is State.WAIT_FOR_SCAN_START:
             self._broker.publish_start()  # entry

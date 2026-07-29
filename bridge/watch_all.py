@@ -3,13 +3,13 @@
 
 watch_state.py はアプリが自己申告する状態(state)チャンネルだけを見るが、
 アプリの実装にバグがあれば自己申告自体が誤りうる。こちらはzenohd上で
-実際にやり取りされる生メッセージ(calibrate/calibrated/start/stop/
-detected/scan)を直接購読し、アプリの自己申告に頼らず「実際に何が
-いつ・どのoriginから送られたか」を時系列で確認できるようにする。
+実際にやり取りされる生メッセージ(start/stop/detected/scan)を直接購読し、
+アプリの自己申告に頼らず「実際に何がいつ・どのoriginから送られたか」を
+時系列で確認できるようにする。
 
-calibrate/calibrated/start/stop/detectedは、broker.pyの_publish()が
-ペイロード先頭1バイトに送信元originを入れているので、それをデコード
-して表示する。scanは自前のバイナリ形式(角度・dome角度・距離)。
+start/stop/detectedは、broker.pyの_publish()がペイロード先頭1バイトに
+送信元originを入れているので、それをデコードして表示する。scanは自前の
+バイナリ形式(角度・dome角度・距離)。
 stateも参考として表示する(watch_state.pyと同じ"{origin}:{状態名}"形式)。
 
 使い方:
@@ -35,7 +35,7 @@ _DEFAULT_CONFIG = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.jso
 _ROBOT = "Radar"
 _SCAN_STRUCT = struct.Struct("<idi")  # angle(int32), dome_angle(float64), distance_mm(int32)
 
-_TRIGGER_CHANNELS = ["calibrate", "calibrated", "start", "stop", "detected"]
+_TRIGGER_CHANNELS = ["start", "stop", "detected"]
 
 
 def _now() -> str:

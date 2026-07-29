@@ -25,6 +25,5 @@ source ~/Projects/sonar_radar/.venv/bin/activate
 echo "=== run_real.py (follower, origin=5) ==="
 exec python3 run_real.py \
   --origin 5 \
-  --participants 2,5 \
   --calibration-timeout 60 \
   --timeout 90

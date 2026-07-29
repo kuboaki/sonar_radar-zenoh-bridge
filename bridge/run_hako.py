@@ -73,22 +73,20 @@ _OVERALL_TIMEOUT_SEC = 30.0
 _DUMMY_DISTANCE_MM = 500
 
 
-def _parse_participants(text: str) -> set:
-    return {int(v) for v in text.split(",") if v.strip()}
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hakoniwa plant経由の動作確認スクリプト")
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
-    parser.add_argument("--participants", default=None, help="calibration_participantsのカンマ区切り")
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
     parser.add_argument(
         "--hako-starter", action="store_true",
         help="starterをスタブではなくplantのforce_sensor PDU(ビューアのSpaceキー操作を含む)で読む",
     )
     parser.add_argument("--timeout", type=float, default=_OVERALL_TIMEOUT_SEC, help="全体のタイムアウト秒数")
-    parser.add_argument("--calibration-timeout", type=float, default=5.0, help="CALIBRATING系のタイムアウト秒数")
+    parser.add_argument(
+        "--calibration-timeout", type=float, default=20.0,
+        help="CALIBRATING(ローカルなハードウェアキャリブレーション)のタイムアウト秒数(既定20秒)",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(PDU_DEF_PATH):
@@ -105,8 +103,6 @@ def main() -> None:
         return 0
 
     def on_manual_timing_control(_ctx):
-        participants = _parse_participants(args.participants) if args.participants else {args.origin}
-
         radar_base = HakoRadarBase(hako_hat)
         starter_is_pushed = None
         if args.hako_starter:
@@ -117,7 +113,6 @@ def main() -> None:
             prefix="hako",
             config_path=args.config,
             origin=args.origin,
-            participants=participants,
             is_leader=args.leader,
             sleep=hako_hat.sleep,
             tick_interval_sec=_TICK_INTERVAL_SEC,

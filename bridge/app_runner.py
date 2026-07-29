@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import Callable, Optional, Set
+from typing import Callable, Optional
 
 from broker import Broker
 from console_report import console_report
@@ -60,12 +60,11 @@ def run_app(
     prefix: str,
     config_path: str,
     origin: int,
-    participants: Set[int],
     is_leader: bool,
     sleep: Callable[[float], None],
     tick_interval_sec: float,
     overall_timeout_sec: float,
-    calibration_timeout_sec: float = 5.0,
+    calibration_timeout_sec: float = 20.0,
     hardware_initialize: Optional[Callable[[], None]] = None,
     starter_is_pushed: Optional[Callable[[], bool]] = None,
     marker_detector_is_detected: Optional[Callable[[], bool]] = None,
@@ -91,13 +90,12 @@ def run_app(
     # brokerの構築のみここで行う。open()とhardware_initialize()の呼び出しは
     # SonarRadarApp自身がINITのentryで行う(broker.open()を先に済ませて
     # から呼ぶため、hardware_initialize()がどれだけブロッキングして時間が
-    # かかっても、その間に届いた相手のcalibrated等を取りこぼさない)。
+    # かかっても、その間に届くstart/stop/detected等を取りこぼさない)。
     broker = Broker(f"sonar_radar_zenoh_bridge_{prefix}_{origin}", origin)
 
     app = SonarRadarApp(
         broker=broker,
         broker_config_path=config_path,
-        calibration_participants=participants,
         is_leader=is_leader,
         hardware_initialize=hardware_initialize,
         starter_is_pushed=starter_is_pushed,
@@ -124,8 +122,7 @@ def run_app(
     with_state_change_reporting(app, _report)
 
     print(
-        f"[{prefix}] origin={origin} participants={sorted(participants)} "
-        f"leader={is_leader} config={config_path}",
+        f"[{prefix}] origin={origin} leader={is_leader} config={config_path}",
         file=sys.stderr,
     )
 
