@@ -80,44 +80,53 @@ def main() -> int:
         "--calibration-timeout", type=float, default=5.0,
         help="CALIBRATING系のタイムアウト秒数(既定5秒)。ハードウェア初期化が完了し"
         "動作可能になってから、相手のcalibratedが揃うのを待つ時間(ハードウェア初期化の"
-        "時間そのものを吸収するためのものではない。初期化はbroker.open()より前に済ませ、"
-        "このタイマーが動き出す前に完了させること)",
+        "時間そのものは含まない。broker.open()はhardware_initialize()より前にINITの"
+        "entryで行われるため、初期化中も相手からの受信は取りこぼさない)",
     )
     args = parser.parse_args()
 
     participants = _parse_participants(args.participants) if args.participants else {args.origin}
 
-    # ハードウェア初期化(特にBuild HATのファームウェアロード)は数十秒かかる
-    # ことがあるため、tickループが動き出す前(broker.open()より前)に済ませておく。
-    closers = []
-
+    # ハードウェア初期化(特にBuild HATのファームウェアロード、数十秒かかる
+    # ことがある)は、SonarRadarAppのINITのentry(broker.open()の後)で
+    # hardware_initialize()として呼ばれる。ここではまだ実行されないため、
+    # radar_base_calibrate等の他のコールバックは、hw辞書経由で遅延束縛する
+    # (hardware_initialize()が実行されるまでは中身が無いが、これらの
+    # コールバックが実際に呼ばれるのはCALIBRATING以降、つまり
+    # hardware_initialize()が完了した後なので問題ない)。
+    #
     # RealRadarBaseとRealStarterはBuild HATへの同じシリアル接続(hat)を
     # 共有する必要がある(複数の同時オープンをサポートしないため)。
-    real_hat = None
-    if args.real_radar_base or args.real_starter:
-        from real_hat import create_real_hat
+    hw: dict = {}
 
-        real_hat = create_real_hat()
-        closers.append(real_hat.close)
+    def hardware_initialize() -> None:
+        if args.real_radar_base or args.real_starter:
+            from real_hat import create_real_hat
 
-    radar_base_calibrate = None
-    radar_base_is_calibrated = lambda: True  # noqa: E731 (既定スタブ、即完了)
+            hw["real_hat"] = create_real_hat()
+        if args.real_radar_base:
+            from real_radar_base import RealRadarBase
+
+            hw["radar_base"] = RealRadarBase(hw["real_hat"])
+        if args.real_starter:
+            from real_starter import RealStarter
+
+            hw["starter"] = RealStarter(hw["real_hat"])
+
     if args.real_radar_base:
-        from real_radar_base import RealRadarBase
+        radar_base_calibrate = lambda: hw["radar_base"].calibrate()  # noqa: E731
+        radar_base_is_calibrated = lambda: hw["radar_base"].is_calibrated()  # noqa: E731
+    else:
+        radar_base_calibrate = None
+        radar_base_is_calibrated = lambda: True  # noqa: E731 (既定スタブ、即完了)
 
-        radar_base = RealRadarBase(real_hat)
-        radar_base_calibrate = radar_base.calibrate
-        radar_base_is_calibrated = radar_base.is_calibrated
-
-    starter_is_pushed = None
     if args.real_starter:
-        from real_starter import RealStarter
-
-        real_starter = RealStarter(real_hat)
-        starter_is_pushed = real_starter.is_pushed
+        starter_is_pushed = lambda: hw["starter"].is_pushed()  # noqa: E731
     elif args.leader:
         fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
         starter_is_pushed = fake_starter.is_pushed
+    else:
+        starter_is_pushed = None
 
     try:
         return run_app(
@@ -130,14 +139,15 @@ def main() -> int:
             tick_interval_sec=_TICK_INTERVAL_SEC,
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
+            hardware_initialize=hardware_initialize,
             starter_is_pushed=starter_is_pushed,
             scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
             radar_base_calibrate=radar_base_calibrate,
             radar_base_is_calibrated=radar_base_is_calibrated,
         )
     finally:
-        for close in closers:
-            close()
+        if "real_hat" in hw:
+            hw["real_hat"].close()
 
 
 if __name__ == "__main__":

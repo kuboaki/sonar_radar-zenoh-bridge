@@ -66,6 +66,7 @@ def run_app(
     tick_interval_sec: float,
     overall_timeout_sec: float,
     calibration_timeout_sec: float = 5.0,
+    hardware_initialize: Optional[Callable[[], None]] = None,
     starter_is_pushed: Optional[Callable[[], bool]] = None,
     marker_detector_is_detected: Optional[Callable[[], bool]] = None,
     radar_base_invert_direction: Optional[Callable[[], None]] = None,
@@ -87,10 +88,10 @@ def run_app(
     """
     _warn_if_legacy_driver_running()
 
-    # brokerの構築のみここで行う。open()はSonarRadarApp自身がINITのentryで
-    # 行う(イベント監視の開始は状態機械が担うべき処理であり、ハードウェア
-    # 初期化(呼び出し側スクリプトの責務、この時点で既に完了しているはず)を
-    # 待たずに済むよう、なるべく早く開始できるようにするため)。
+    # brokerの構築のみここで行う。open()とhardware_initialize()の呼び出しは
+    # SonarRadarApp自身がINITのentryで行う(broker.open()を先に済ませて
+    # から呼ぶため、hardware_initialize()がどれだけブロッキングして時間が
+    # かかっても、その間に届いた相手のcalibrated等を取りこぼさない)。
     broker = Broker(f"sonar_radar_zenoh_bridge_{prefix}_{origin}", origin)
 
     app = SonarRadarApp(
@@ -98,6 +99,7 @@ def run_app(
         broker_config_path=config_path,
         calibration_participants=participants,
         is_leader=is_leader,
+        hardware_initialize=hardware_initialize,
         starter_is_pushed=starter_is_pushed,
         marker_detector_is_detected=marker_detector_is_detected,
         radar_base_invert_direction=radar_base_invert_direction,

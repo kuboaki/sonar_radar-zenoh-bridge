@@ -75,6 +75,7 @@ class SonarRadarApp:
         broker_config_path: str,
         calibration_participants: Set[int],
         is_leader: bool,
+        hardware_initialize: Optional[Callable[[], None]] = None,
         starter_is_pushed: Optional[Callable[[], bool]] = None,
         marker_detector_is_detected: Optional[Callable[[], bool]] = None,
         radar_base_invert_direction: Optional[Callable[[], None]] = None,
@@ -96,6 +97,12 @@ class SonarRadarApp:
         self._timer = None
         self._state = State.INIT
         self._calibration_timeout_sec = calibration_timeout_sec
+        # 実機とシミュレータでは、ハードウェア初期化の中身も外見も異なる
+        # (実機: ファームウェアロード等の複数手順・ブロッキング、
+        # シミュレータ: 実質的な待ちが無い変数設定)ため、radar_base_*等と
+        # 同じく注入可能にし、この違いを呼び出し側(run_real.py/run_hako.py)
+        # に吸収させる(既定は何もしないスタブ)。
+        self._hardware_initialize_impl = hardware_initialize or (lambda: None)
         self._starter_is_pushed_impl = starter_is_pushed or (lambda: False)
         self._marker_detector_is_detected_impl = marker_detector_is_detected or (lambda: False)
         self._radar_base_invert_direction_impl = radar_base_invert_direction or (lambda: None)
@@ -111,6 +118,9 @@ class SonarRadarApp:
         return self._state is State.TERMINATED
 
     # --- ガード関数・エフェクト (ClassName_methodName規約に沿った命名) ---
+
+    def hardware_initialize(self) -> None:
+        self._hardware_initialize_impl()
 
     def check_calibration_participants(self) -> bool:
         """すべての参加者がキャリブレーション実行の応答を返したかチェックする。"""
@@ -173,16 +183,27 @@ class SonarRadarApp:
             pass
 
     def _tick_init(self) -> None:
-        # entry: broker.open() → timer_create()
+        # entry: broker.open() → hardware_initialize() → timer_create()
         # calibration_participants はコンストラクタ引数で受け取り済み
         # (副作用も他への依存も無い純粋なデータ設定のため、コンストラクタで
-        # 済ませてよい)。broker.open()とtimer_create()は、それぞれ副作用
-        # (I/O・リソース確保)を持つ本当の意味でのアクションなので、ここに
-        # 明示する。broker.open()はハードウェア初期化(実機のBuild HAT等)を
-        # 待たない(そちらは呼び出し側スクリプトの責務でモデル外、待って
-        # しまうとイベント監視の開始が遅れ、先に届いた相手のcalibrated等を
-        # 取りこぼす)。
+        # 済ませてよい)。broker.open()/hardware_initialize()/timer_create()は
+        # それぞれ副作用(I/O・リソース確保)を持つ本当の意味でのアクション
+        # なので、ここに明示する。
+        #
+        # broker.open()を先に行うのは、その後のhardware_initialize()が
+        # (実機ではBuild HATのファームウェアロード等で)ブロッキングして
+        # 時間がかかっても、Zenohの受信は内部スレッドが非同期に処理する
+        # ため、その間に相手から届いたcalibrated等を取りこぼさないため。
+        # broker.open()さえ済んでいれば、hardware_initialize()がどれだけ
+        # 遅くても購読は生きているので、新しい状態やスレッドを増やす必要はない。
+        #
+        # hardware_initialize()の中身は実機とシミュレータで中身も外見も
+        # 異なる(実機: ファームウェアロード等の複数手順・ブロッキング、
+        # シミュレータ: 実質的な待ちが無い変数設定)ため、radar_base_*等と
+        # 同じ「注入可能な関数」として呼び出し側に委ねる(この関数自体は
+        # 何も知らない)。
         self._broker.open(self._broker_config_path)
+        self.hardware_initialize()
         self._timer = spikehat_timer_create()
         self._transition_to(State.WAIT_FOR_CALIBRATE)
 
