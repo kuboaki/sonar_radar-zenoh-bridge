@@ -11,8 +11,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # macOSのdyldは絶対パス指定のdlopenでも同名ファイルがあればそちらを優先してしまう。
   # /usr/local/hakoniwa/lib には(Zenoh無効の)古いビルドの libhakoniwa_pdu_endpoint.dylib が
   # 残っているため、それより先に .local 側を検索させることでシャドーイングを回避する。
-  export DYLD_LIBRARY_PATH="$HAKO_PDU_ENDPOINT_LIB_DIR:$DYLD_LIBRARY_PATH"
+  export DYLD_LIBRARY_PATH="$HAKO_PDU_ENDPOINT_LIB_DIR:${DYLD_LIBRARY_PATH:-}"
 else
   export HAKO_PDU_ENDPOINT_SHARED_LIB="$HAKO_PDU_ENDPOINT_LIB_DIR/libhakoniwa_pdu_endpoint.so"
-  export LD_LIBRARY_PATH="$HAKO_PDU_ENDPOINT_LIB_DIR:$LD_LIBRARY_PATH"
+  export LD_LIBRARY_PATH="$HAKO_PDU_ENDPOINT_LIB_DIR:${LD_LIBRARY_PATH:-}"
 fi
