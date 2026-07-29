@@ -4,7 +4,7 @@
 
 sonar_radar 本体は「実機・スタンドアロンSIM・Hakoniwa SIM」という3つの環境をデジタルツインとして共存させる設計だが、本リポジトリはそれとは別レイヤーの実験として、**ネットワーク越しに複数マシン上で動く実機とシミュレータを、start/stop/calibrate等のイベント単位で疎結合に同期させる**ことを目的とする。
 
-> **設計の転回（進行中）**: 当初は `sonar_radar` 本体に手を入れる形で実装していたが、実装・実機検証を通じて設計上の問題が判明し、**`sonar_radar` は完全に無改造のまま使わず、本リポジトリ側に独立した「Zenoh版 sonar_radar」ステートマシンを新設する**方針に転回した。経緯と現在の状態機械設計は [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) を参照。このREADMEの一部セクションは転回前の内容のままなので、矛盾する記述は設計ドキュメント側を正とする。
+> **設計の転回（2回）**: 当初は `sonar_radar` 本体に手を入れる形で実装していたが、実装・実機検証を通じて設計上の問題が判明し、**`sonar_radar` は完全に無改造のまま使わず、本リポジトリ側に独立した「Zenoh版 sonar_radar」ステートマシンを新設する**方針に転回した（1回目）。さらにその後、実機・シムの2台構成での動作検証を重ねる中で、キャリブレーション完了をマシン間で待ち合わせる設計自体が人の操作速度に依存して壊れやすいことが判明し、**マシン間のキャリブレーション協調を廃止し、各マシンがローカルで独立にキャリブレーションを完了させる**方針に再転回した（2回目）。経緯と現在の状態機械設計は [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) を参照。このREADMEの一部セクション（特に下記「【廃案】sonar_radar 本体側で必要な変更」）は転回前の内容のままなので、矛盾する記述は設計ドキュメント側を正とする。
 
 ## 背景
 
@@ -26,8 +26,6 @@ Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単
 
 | topic | 意味 | 発生元 | 購読先 |
 |---|---|---|---|
-| `radar/dome/calibrate` | キャリブレーション実行指示 | 実機/シム起動時、または外部（ブリッジ）コマンド | 実機, シム |
-| `radar/dome/calibrated` | 自分のキャリブレーション完了通知 | 実機・シム各自（キャリブレーション完了時） | 相手側、ブリッジ（モニタ） |
 | `radar/starter/start` | スキャン開始 | 実機starter / シムstarter / ブリッジ疑似starter | 実機, シム, ブリッジ（モニタ） |
 | `radar/starter/stop` | スキャン停止 | 同上 | 同上 |
 | `radar/detector/detected` | マーカー検出→方向反転 | 実機 or シムの marker_detector | 相手側、ブリッジ（モニタ） |
@@ -66,7 +64,8 @@ sonar_radar-zenoh-bridge/
 │   └── development_log.md             # 「テストによる段階的な開発」の進め方と教訓の記録
 ├── pdu/
 │   ├── pdudef.json           # robot_name="Radar" で pdutypes.json を参照
-│   └── pdutypes.json         # channel 0-5（calibrate/calibrated/start/stop/detected/scan）
+│   └── pdutypes.json         # channel 2-6（start/stop/detected/scan/state）。calibrate/calibratedは
+│                              # マシン間協調廃止に伴い廃止済み(欠番0/1は詰め直していない)
 ├── config/
 │   ├── mac/                  # シム側 endpoint 設定。zenohd はMac自身がローカル(127.0.0.1)で稼働する前提
 │   │   ├── endpoint_zenoh.json
@@ -145,16 +144,16 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 ### デモ用スクリプト(手順を覚える必要が無い、まずここを見る)
 
-手順を毎回手で組み立てると、`--config`忘れ・`--participants`の指定間違い・
-タイムアウト不揃い等のミスが起きやすいと分かったため、正しいフラグを
-組み込んだ起動スクリプトを`bridge/`に用意してある。以下の手順の詳細
-(順序の理由等)を知りたいときだけ、この後の各節を読めばよい。
+手順を毎回手で組み立てると、`--config`忘れ・タイムアウト不揃い等の
+ミスが起きやすいと分かったため、正しいフラグを組み込んだ起動スクリプト
+を`bridge/`に用意してある。以下の手順の詳細(順序の理由等)を知りたい
+ときだけ、この後の各節を読めばよい。
 
 | 何をしたいか | 実行する機 | コマンド |
 |---|---|---|
-| 動作シナリオ1(実機単体でのstart確認) | 実機 | `bash bridge/demo_real_leader.bash solo` |
+| 動作シナリオ1(実機単体でのstart確認) | 実機 | `bash bridge/demo_real_leader.bash` |
 | 動作シナリオ2(シミュレータ単体でのstart確認) | Mac | `bash bridge/demo_hako_leader.bash`(要plant起動済み、下記参照) |
-| 実機+Macの2台構成デモ(実機側) | 実機 | `bash bridge/demo_real_leader.bash`(引数無し=既定`pair`) |
+| 実機+Macの2台構成デモ(実機側) | 実機 | `bash bridge/demo_real_leader.bash`(単体と同じコマンドでよい) |
 | 実機+Macの2台構成デモ(Mac側、follower) | Mac | `bash bridge/demo_mac_follower.bash` |
 | 状態遷移の観測(origin付き) | どちらでも | `bash bridge/demo_watch.bash state` |
 | 生のPDUメッセージの観測 | どちらでも | `bash bridge/demo_watch.bash all`(既定) |
@@ -195,7 +194,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    python3 watch_state.py 2>/dev/null
    ```
 
-   `watch_state.py`はアプリが自己申告する`state`チャンネルだけを見る。実装のバグで自己申告自体が誤りうるため、アプリの申告に頼らず生のトリガーメッセージ(`calibrate`/`calibrated`/`start`/`stop`/`detected`/`scan`)を直接確認したい場合は`watch_all.py`を使う(使い方は同じ、`2>/dev/null`も同様に付けること)。
+   `watch_state.py`はアプリが自己申告する`state`チャンネルだけを見る。実装のバグで自己申告自体が誤りうるため、アプリの申告に頼らず生のトリガーメッセージ(`start`/`stop`/`detected`/`scan`)を直接確認したい場合は`watch_all.py`を使う(使い方は同じ、`2>/dev/null`も同様に付けること)。
 
    ```bash
    python3 watch_all.py 2>/dev/null
@@ -223,7 +222,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
    python3 run_real.py --leader --timeout 15
    ```
 
-   `watch_state.py`側のターミナルに `[origin=1] WAIT_FOR_CALIBRATE` → `CALIBRATING` → `WAIT_FOR_CALIBRATED` → `WAIT_FOR_START_PRESS` → `WAIT_FOR_START_RELEASE` → `WAIT_FOR_SCAN_START` → `SCANNING` と時刻・origin付きで表示されれば成功。2台構成なら、両方のoriginの行が交互に(お互いのcalibrated受信を待ち合わせながら)進むのが見える。`zenohd`のREST経由でも直近の値だけは確認できる（`curl http://localhost:8000/radar/dome/state`。ただし全originで1つの値を共有するため直近の1件しか分からず、経過や区別を追うにはwatch_state.pyを使うこと）。
+   `watch_state.py`側のターミナルに `[origin=1] CALIBRATING` → `WAIT_FOR_START_PRESS` → `WAIT_FOR_START_RELEASE` → `WAIT_FOR_SCAN_START` → `SCANNING` と時刻・origin付きで表示されれば成功。`CALIBRATING`はマシン間協調を行わないローカル処理なので、2台構成でも各originが独立したタイミングで通過する(お互いを待ち合わせない)。`WAIT_FOR_START_PRESS`以降は、`start`メッセージの送受信でorigin間が協調する。`zenohd`のREST経由でも直近の値だけは確認できる（`curl http://localhost:8000/radar/dome/state`。ただし全originで1つの値を共有するため直近の1件しか分からず、経過や区別を追うにはwatch_state.pyを使うこと）。
 
    実機のハードウェアを使う場合は`--real-radar-base`（旋回モーター）・`--real-starter`（フォースセンサー）を付ける（Raspberry Pi上でのみ動作。Build HATは同時オープンをサポートしないため、両方を同時に指定した場合は`real_hat.py`が構築する単一の接続を共有する）。
 
@@ -256,21 +255,21 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
    ビューアでレーダードームが回転し、`watch_state.py`(起動していれば)に状態遷移が表示されれば成功。
 
-### 実機とシミュレータの2台構成（重要: 起動順序）
+### 実機とシミュレータの2台構成（起動順序について）
 
-Zenohは「購読を開始した後に届いたpublish」しか受信できず、購読開始前のpublishは再送されない。そのため、**双方のbroker.open()(Zenoh購読)が、お互いの`calibrated`publishより先に完了している必要がある**。
+**キャリブレーション(`INIT`→`CALIBRATING`)はマシン間協調を行わないローカル処理のため、実機とMacの起動順序に制約は無い**（[`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md)「背景: キャリブレーション協調の廃止」参照）。
 
-- 実機側は、`SonarRadarApp`の`INIT`のentryが`broker.open()`を`hardware_initialize()`(Build HATのファームウェアロード等)より先に行うため、実機のハードウェア初期化がどれだけ時間を要しても、実機の購読自体は早い段階で開いている(この点は設計で解消済み)。ただし**実機のプロセス自体は、起動したら即座にtickが始まり、途中で止めておくことができない**。
-- Mac(`run_hako.py`)側は、hakopy controllerとして登録されるだけでは`broker.open()`されず、`hako-cmd start`が呼ばれて初めてtickループ(≒`broker.open()`)が動き出す。これはhakopyの仕組み上の制約で、今も残っている。裏を返すと、**`hako-cmd start`は操作者が任意のタイミングで押せる、唯一「待たせておける」開始トリガー**である。
+以前は「双方のbroker.open()(Zenoh購読)が、お互いの`calibrated`publishより先に完了している必要がある」という制約があり、実機を先に起動しMacの`hako-cmd start`を最後にする、という順序ルールを何度か試行錯誤して定めていた。しかし実機側のキャリブレーション自体が数秒で終わってしまうため、人がその間に`hako-cmd start`を押しきれず結局取りこぼす、という事故が起動順序をどう変えても再発した。根本原因は「購読開始が人の操作待ちでゲートされている側は、相手の完了に間に合わない可能性がある」という構造そのものにあったため、キャリブレーションのマシン間協調自体を廃止した。
 
-したがって、**leader/followerどちらの役割であっても関係なく、常に実機のプロセスを先に起動し、Macの`hako-cmd start`を最後にする**こと(以前は「leader側を先に」と説明していたが誤りだった。実機がleaderの回でたまたま正しい順序と一致していただけで、Macをleaderにした回で、Macの`hako-cmd start`を先にしてしまい、起動が遅い実機の購読が間に合わず`CALIBRATION_FAILED`になる不具合を実際に踏んだ)。
+現在制約が残るのは、`WAIT_FOR_START_PRESS`以降の`start`メッセージのやり取りのみ。Mac(`run_hako.py`)側は、hakopy controllerとして登録されるだけでは`broker.open()`されず、`hako-cmd start`が呼ばれて初めてtickループ(≒`broker.open()`)が動き出す(hakopyの仕組み上の制約)。そのため、**実機側でstarterボタンを押す(スキャン開始する)のは、Macの`hako-cmd start`を済ませた後にすること**。逆にキャリブレーションは待ち合わせが無いので、実機のプロセス自体はMacより先でも後でも起動してよい。
 
 1. Mac: plantを起動する（上記の2）
 2. Mac: `run_hako.py`を起動する（上記の3。leader/followerどちらでもよい、`--leader`の有無で決める）
-3. 実機: `run_real.py --real-starter --real-radar-base`を実行する（leaderなら`--leader`も付ける。**Macの`hako-cmd start`より先に実行すること**。実機の購読はプロセス起動後すぐに開くため、モーター駆動等の時間のかかる初期化が終わる前でも安全）
-4. Mac: `hako-cmd start`を実行する（上記の4。実機が確実に動き出した後で、ここでMac側の購読・publishが始まる）
+3. 実機: `run_real.py --real-starter --real-radar-base`を実行する（leaderなら`--leader`も付ける。Macより先でも後でもよい）
+4. Mac: `hako-cmd start`を実行する（上記の4）
+5. 実機側でstarterボタンを押す（`hako-cmd start`より前に押してしまうと、Mac側がまだ`start`を購読しておらず取りこぼす）
 
-`--participants`は両者で同じ集合（例: `--participants 2,5`、実機`--origin 2`・Mac`--origin 5`）を指定すること。この順序を守れば、followerである側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
+この順序を守れば、followerである側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
 
 観測方法（`watch_state.py`/`watch_all.py`）は「`bridge/`の動作確認（単体、1プロセス自己ループバック）」の節を参照（1台構成でも2台構成でも同じ方法が使え、全origin(マシン)の状態遷移が1つのターミナルに集まる）。
 
@@ -284,21 +283,23 @@ Zenohは「購読を開始した後に届いたpublish」しか受信できず�
 
 **設計継続（優先）**
 
-1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`相当、`SCANNING`、`detected`の対称設計、参加者コンフィグの形式、hatの受け取り方など未確定事項が複数残っている）
+1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`/`SCANNING`（到達まで）は実装・確認済み。`detected`の対称設計、`SCAN_FAILED`等、`MARKER_DETECTED`以降が未確定のまま残っている）
 
 **実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中。進め方と教訓は[`docs/development_log.md`](docs/development_log.md)を参照）**
 
-2. [x] `bridge/` パッケージを新設。`INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(現`bridge/run_real.py`)。
-3. [x] 実機Raspberry Pi 4B+とMacの2台構成で、キャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+2. [x] `bridge/` パッケージを新設。`INIT → WAIT_FOR_CALIBRATE → CALIBRATING → WAIT_FOR_CALIBRATED → (WAIT_FOR_START_PRESS | CALIBRATION_FAILED → TERMINATED)` を実装し、1プロセス構成(`calibration_participants = {自分のorigin}`)で実際のZenoh(zenohd + hakoniwa_pdu_endpoint)経由のpublish/受信により、成功経路・失敗経路(タイムアウト)の両方を動作確認済み(現`bridge/run_real.py`)。**(2026-07-29: この`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`によるマシン間協調は後に#10で廃止。現在は`INIT → CALIBRATING → WAIT_FOR_START_PRESS`)**
+3. [x] 実機Raspberry Pi 4B+とMacの2台構成で、キャリブレーションの協調動作(`calibration_participants`が複数originで揃うこと)を実ネットワーク越しに確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。**(2026-07-29: この協調動作自体を#10で廃止)**
 4. [x] `WAIT_FOR_START_PRESS` / `WAIT_FOR_START_RELEASE` / `WAIT_FOR_SCAN_START` / `SCANNING`（到達まで）を実装し、実機Raspberry Pi 4B+とMacの2台構成（デモ会場用の別ルーター経由）でstart協調動作を確認済み(現`bridge/run_real.py`)。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 5. [x] `bridge/real_starter.py`(`RealStarter`)を新設し、擬似スイッチではなく実機のフォースセンサー(libspikehat)を直接使う`--real-starter`オプションを追加。実際に実機の物理ボタンを押して、実機・Macとも`SCANNING`まで到達することを確認済み。Build HATには準備完了を問い合わせるAPIが無いため、実際にセンサーが読めるようになるまでポーリングして待つ仕組みを実装した。
 6. [x] キャリブレーション処理自体が未実装だった設計上の欠落を修正（`WAIT_CALIBRATED`を`WAIT_FOR_CALIBRATE`/`CALIBRATING`/`WAIT_FOR_CALIBRATED`の3状態に分割）。`bridge/real_radar_base.py`(`RealRadarBase`)を新設し、擬似スタブではなく実機のモーター(libspikehat)を直接使う`--real-radar-base`オプションを追加。実際にモーターが機械的0位置→オフセット位置へホーミングし、`CALIBRATING`が完了することを実機で確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 7. [x] `sonar_radar` 本体（コミット`038ed15`）をrevert・push・実機pull済み（`19eccc5`）。あわせて実機での経過時間計測のためのタイムスタンプログ出力も追加・push済み（`74f374b`）。
 8. [x] `bridge/hako_radar_base.py`(`HakoRadarBase`)を新設し、MuJoCo(Hakoniwa plant、`sonar_radar_hako.py`を無改造で使用)経由でradar_baseを駆動できるようにした。`real_radar_base.py`と同じく、`motor_run_to_position()`がブロッキング実装のため、`motor_pwm()`/`motor_get_position()`による非ブロッキングのtickベース駆動にしている。
 9. [x] `run_calibration_smoke_test.py`/`run_start_smoke_test.py`とそれぞれのhako版(計4本)を`run_real.py`/`run_hako.py`(共通部分は`app_runner.py`)に統合。個別に育って機能追加漏れ(`--real-radar-base`)が起きた反省から、SonarRadarAppの構築・tickループ・state reportingを1箇所に集約した。あわせて`bridge/hako_starter.py`(`HakoStarter`)を新設し、`real_radar_base.py`/`real_starter.py`がBuild HATへの接続を共有する形に修正(`real_hat.py`)。実機(leader)とMac(follower、シミュレータ)の2台構成で、followerがstarter操作なしで`start`受信のみ`SCANNING`へ直接遷移することを確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
-10. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
-11. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+10. [x] マシン間のキャリブレーション協調（`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`/`check_calibration_participants()`/`calibrate`・`calibrated`PDU）を廃止し、`INIT → CALIBRATING`（ローカルのみ、マシン間通信なし）→自動的に`WAIT_FOR_START_PRESS`という設計に再転回。`CALIBRATION_FAILED`はローカルなハードウェア障害検出用として存続(タイムアウト20秒)、`timer_stop()`は`CALIBRATING`のexitに一本化。状態機械図・クラス図・`docs/zenoh_state_machine_design.md`・`bridge/`のコード・`pdu/pdutypes.json`・zenoh設定を一通り追従させ、実機単体(動作シナリオ1)・実機+Mac(MuJoCoシム)の2台構成の両方で`CALIBRATING`から`SCANNING`までエラーなく到達することを実地確認済み。経緯は[`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md)「背景: キャリブレーション協調の廃止」、詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+11. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
+12. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+13. 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`が`sonar_radar`本体向けに提供している「実機・シムで差し替え可能な共通インターフェース」と同様のものを、ブリッジ側の`hardware_initialize`/`radar_base_calibrate`/`radar_base_is_calibrated`/`starter_is_pushed`にも導入する(現状は`run_real.py`/`run_hako.py`でそれぞれ個別に配線している)。
 
 ## ステータス
 
-設計転回中。旧設計（sonar_radar本体への変更）は実装・実機検証まで完了していたが、発見された問題により方針転換し、新しい独立ステートマシンの設計を進めている。PDU定義・zenoh設定・Mac/実機のpdu-endpoint環境構築（インフラ部分）は転回の影響を受けず完了済み。ドライバスクリプトの実装は新設計確定後に着手する。
+`INIT → CALIBRATING → WAIT_FOR_START_PRESS → WAIT_FOR_START_RELEASE → WAIT_FOR_SCAN_START → SCANNING`（到達まで）を実装・実機/シム双方で実地確認済み。キャリブレーションはマシン間協調を行わないローカル処理に転回済み(#10)。次のマイルストーンは`MARKER_DETECTED`以降(#11)。PDU定義・zenoh設定・Mac/実機のpdu-endpoint環境構築（インフラ部分）は完了済み。旧`driver/sonar_radar_zenoh.py`（`sonar_radar`本体を直接importする転回前の実装）は使わない。

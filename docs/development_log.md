@@ -167,6 +167,46 @@ CALIBRATING導入にあたり、実機のハードウェア初期化・キャリ
 
 **結果**: 実機(`192.168.11.3`、origin=2)で `--real-radar-base` を指定して実行したところ、`WAIT_FOR_CALIBRATE` → `CALIBRATING`(実際にモーターが機械的0位置→オフセット位置へホーミング) → `WAIT_FOR_CALIBRATED` → `WAIT_FOR_START_PRESS` まで到達した。ユーザー自身が実機のターミナルで直接実行して確認(pushしなくても、`scp`で転送済みのファイルだけで実機での動作確認ができることも確認できた)。**Zenoh版のCALIBRATING状態が、実際にモーターホーミングを行う実機で初めて成功したエンドツーエンド確認。**
 
+## マイルストーン3: マシン間キャリブレーション協調の廃止(設計の再転回、完了)
+
+### 背景: 起動順序ルールが何度直しても再発した
+
+動作シナリオ1(実機単体)・動作シナリオ2(シム単体)・実機+Macの2台構成それぞれで実地検証を重ねる中で、「双方のbroker.open()(Zenoh購読)が、お互いの`calibrated`publishより先に完了している必要がある」という制約に起因する取りこぼしが、起動順序ルールを2回訂正しても解消しなかった。
+
+1. 最初のルール「Mac(follower)の`hako-cmd start`より先に実機を起動する」は、実機がleaderの回ではたまたま成立していたが、Macをleaderにした回で失敗した。Macの`hako-cmd start`が先に走り、起動が遅い実機の購読が間に合わず`CALIBRATION_FAILED`になった。
+2. 「leader/followerに関係なく、常に実機を先に起動し、Macの`hako-cmd start`を最後にする」に訂正したが、これも失敗した。実機側のキャリブレーション自体が数秒で完了してしまうため、人がチャット上の合図を読んで`hako-cmd start`を打鍵する時間より速く`calibrated`がpublishされ、まだ購読を開いていないMac側が結局取りこぼした。
+
+**根本原因**: どちらのルールも、「購読開始が人の操作待ちでゲートされている側(Macの`hako-cmd start`)は、相手の完了に間に合わない可能性がある」という構造そのものを解決していなかった。起動順序をどう入れ替えても、相手側の処理が人間の反応時間より速く終われば同じ問題が起きる。
+
+### 設計判断: 協調を無くす
+
+この構造的な問題を受けて、「起動順序を工夫する」ではなく「マシン間のキャリブレーション協調そのものを無くす」方向へ転回した。各マシン(実機・シム)は、人が起動してからキャリブレーションが終わるまでを、他マシンとの通信なしに独立して完結させる。
+
+- `INIT`(`broker.open()` → `hardware_initialize()`)から`CALIBRATING`(ローカルなハードウェアキャリブレーションのみ)までを1つの流れに閉じ込め、完了したら自動的に`WAIT_FOR_START_PRESS`へ遷移する
+- `WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`の2状態、`calibrate`/`calibrated`のPDUメッセージ、`check_calibration_participants()`ガードを全廃
+- `CALIBRATION_FAILED`は残すが、用途を「マシン間協調の失敗」から「ローカルなハードウェア障害(物理的にモーターが固着している等)」に変更し、タイムアウトを20秒にした
+- `timer_stop()`は、教訓7で「`WAIT_FOR_CALIBRATED`のexitと`CALIBRATION_FAILED`のentryの両方で呼ばれるが冪等だから問題ない」としていたが、今回`CALIBRATING`という単一の状態に統合されたのを機に、「本来`CALIBRATING`でなくなったら止めるものである」という意味論に立ち返り、`CALIBRATING`のexitだけに一本化した
+
+### 進め方: 図→クラス図→コードの順で追従
+
+いつも通り、まずAstahの状態機械図を直す(`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`削除、`INIT→CALIBRATING`、entry/exitの`timer_stop()`整理、作業用に貼っていた参照テーブルの削除)。次に、状態機械図の変更で発生したクラス図側の不整合(`sonar_radar`の`check_calibration_participants()`、`broker`の`publish_calibrate`/`publish_calibrated`/`is_calibrated_received_from`)を、忘れないうちにその場で整理した。両方の図に残っていた、廃止した設計を前提とする古いノート(5件)も削除した。
+
+その後、コードを図に追従させた: `sonar_radar_app.py`(state enum・tick関数・`_transition_to`)、`broker.py`(publish/consume/購読)、`app_runner.py`/`run_real.py`/`run_hako.py`(不要になった`--participants`引数の除去)、`pdu/pdutypes.json`・`config/{mac,raspi4b}/comm/zenoh_pubsub_comm.json`・`watch_all.py`(calibrate/calibratedチャンネルの除去)。`demo_*.bash`の起動順序に関する説明も、協調廃止により順序が自由になった旨に書き換えた。
+
+### 確認した内容
+
+- 1プロセス自己ループバック(スタブハードウェア): `INIT → CALIBRATING → WAIT_FOR_START_PRESS → WAIT_FOR_START_RELEASE → WAIT_FOR_SCAN_START → SCANNING → TERMINATED` を確認(PDUチャンネル欠番によるエラー無し)
+- 実機単体(動作シナリオ1、`--real-starter --real-radar-base`): Build HATファームウェアロード → `CALIBRATING`(実際にモーターホーミング) → `WAIT_FOR_START_PRESS` → … → `SCANNING` → `TERMINATED` まで、`CALIBRATION_FAILED`に陥らず到達
+- 実機(leader)+Mac(follower、MuJoCoシム経由の`run_hako.py`)の2台構成: 起動順序を意識せず両者を起動し、`hako-cmd start`後に実機のstarterボタンを押すだけで、両machineとも`SCANNING`まで到達
+
+### 得られた教訓
+
+8. **「起動順序のルールで解決する」は、根本原因が構造的な非対称性にある場合は対症療法にしかならない。** 同じ種類の取りこぼしが起動順序ルールを2回訂正しても再発したことが、「人の操作待ちでゲートされる側は原理的に間に合わない可能性がある」という構造上の問題に気づく決め手になった。表面的な手順の調整を繰り返す前に、「そもそも待ち合わせという設計自体が必要か」を疑うべきだった。
+
+9. **状態機械が新設計に変わったら、それを前提にしていた過去の設計判断(教訓7)も見直す。** 「`timer_stop()`の多重呼び出しは冪等だから問題ない」という教訓7の判断は、当時の`WAIT_FOR_CALIBRATED`/`CALIBRATION_FAILED`という2状態構成では正しかったが、`CALIBRATING`1状態に統合された今、「なぜ2箇所で呼んでいるのか」を問い直すと、`timer_stop()`本来の意味論(そのタイマーを使う状態でなくなったら止める)には`CALIBRATING`のexitでの1箇所だけで十分だと分かった。「冪等だから問題ない」という判断は「今のままで害はない」の確認であって、「これが正しい設計である」の確認ではないことに注意が要る。
+
+10. **図・クラス図・ドキュメント・コードの追従順序を守ることで、修正漏れが起きにくくなる。** 状態機械図→(気づいた時点で即座に)クラス図→設計ドキュメント→コード→README/development_logという順で進めたことで、「クラス図の`check_calibration_participants()`を消し忘れる」「READMEの起動順序節だけ古いまま残る」といった典型的な取りこぼしを避けられた。特にクラス図は「今やらないと忘れる」という自己申告のタイミングでその場処理したのが効いた。
+
 ### 次のマイルストーン(継続)
 
-`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。実機のstarter実接続での2台構成テストも、この記録を踏まえて再挑戦する(実機側を先に起動する運用で)。
+`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。また、実機/シムのハードウェア抽象層を`libspikehat`/`libspikehat_sim`のように統一する検討も残っている(現状は`run_real.py`/`run_hako.py`で個別に配線)。
