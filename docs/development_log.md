@@ -207,6 +207,26 @@ CALIBRATING導入にあたり、実機のハードウェア初期化・キャリ
 
 10. **図・クラス図・ドキュメント・コードの追従順序を守ることで、修正漏れが起きにくくなる。** 状態機械図→(気づいた時点で即座に)クラス図→設計ドキュメント→コード→README/development_logという順で進めたことで、「クラス図の`check_calibration_participants()`を消し忘れる」「READMEの起動順序節だけ古いまま残る」といった典型的な取りこぼしを避けられた。特にクラス図は「今やらないと忘れる」という自己申告のタイミングでその場処理したのが効いた。
 
+## ハードウェア抽象層の統一: RadarHardware(RealHardware/HakoHardware)導入(完了)
+
+### 背景
+
+`sonar_radar`本体は`libspikehat`/`libspikehat_sim`という「同一ヘッダ(`libspikehat.h`)に対する実機/シムの2実装」パターンでハードウェアアクセスを抽象化しているが、`sonar_radar-zenoh-bridge`側の呼び出しスクリプト(`run_real.py`/`run_hako.py`)はこのパターンを採用しておらず、`run_real.py`は`hw`辞書による遅延束縛、`run_hako.py`は`on_manual_timing_control`内での都度構築、と個別の配線になっていた。次のマイルストーン(`MARKER_DETECTED`以降)に進む前の整理として、この非対称を解消した。
+
+### 設計判断
+
+`bridge/hardware.py`に`RadarHardware(abc.ABC)`を新設し、`initialize`/`radar_base_calibrate`/`radar_base_is_calibrated`/`starter_is_pushed`/`close`の契約を定義。`RealHardware`(Build HAT経由)と`HakoHardware`(`HakoSpikeHat`経由)で実装した。
+
+- `RealHardware`は`initialize()`内で`real_hat.create_real_hat()`を1回だけ呼び、`RealRadarBase`/`RealStarter`が同じシリアル接続(`hat`)を共有する必要がある(複数の同時オープンをサポートしない)という既存の制約をそのままカプセル化した。`radar_base`/`starter`未使用時は既定スタブ(`is_calibrated()`は即`True`、`is_pushed()`は常に`False`)を返す。
+- `HakoHardware`は、`hako_hat`(`HakoSpikeHat`)自体は`hakopy`のasset登録の都合で呼び出し側(`run_hako.py`)が`initialize()`より前に構築して渡す(この構築だけは`SonarRadarApp`のINITタイミングに合わせられない、`hakopy`フレームワーク側の制約)。`HakoRadarBase`/`HakoStarter`の構築は軽量・即時なので実機のような遅延の必要は無いが、対称性のため`initialize()`内で行う。
+- `SonarRadarApp`のコンストラクタは今まで通り4つの独立したコールバックのままで変更なし。状態機械図が個別のガード/エフェクト関数として設計しているため、これを1個の`hardware`オブジェクトにまとめるのは図の設計意図から外れると判断し、統一対象は`run_real.py`/`run_hako.py`側の配線だけに絞った。状態機械図・クラス図とも、この階層の実装詳細はもともと対象外のため変更なし。
+
+`run_real.py`の`_FakeStarter`(leaderの擬似ボタン)はテスト専用の関心事として、`RadarHardware`側には移さず引き続き`run_real.py`側に残した。
+
+### 確認した内容
+
+1プロセス自己ループバック(スタブハードウェア)と実機単体(動作シナリオ1、`demo_real_leader.bash`)で、Build HATファームウェアロード→`CALIBRATING`(実際にモーターホーミング)→`WAIT_FOR_START_PRESS`→`WAIT_FOR_START_RELEASE`→`WAIT_FOR_SCAN_START`→`SCANNING`まで到達することを確認済み。
+
 ### 次のマイルストーン(継続)
 
-`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。また、実機/シムのハードウェア抽象層を`libspikehat`/`libspikehat_sim`のように統一する検討も残っている(現状は`run_real.py`/`run_hako.py`で個別に配線)。
+`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
