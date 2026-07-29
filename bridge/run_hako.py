@@ -56,8 +56,7 @@ import hakopy  # noqa: E402
 from libspikehat_hako import HakoSpikeHat  # noqa: E402
 
 from app_runner import run_app  # noqa: E402
-from hako_radar_base import HakoRadarBase  # noqa: E402
-from hako_starter import HakoStarter  # noqa: E402
+from hardware import HakoHardware  # noqa: E402
 
 ASSET_NAME = "SonarRadarZenohBridgeController"
 ROBOT_NAME = "SonarRadarAsset"  # plant(sonar_radar_hako.py)側と一致させる
@@ -103,11 +102,7 @@ def main() -> None:
         return 0
 
     def on_manual_timing_control(_ctx):
-        radar_base = HakoRadarBase(hako_hat)
-        starter_is_pushed = None
-        if args.hako_starter:
-            starter = HakoStarter(hako_hat)
-            starter_is_pushed = starter.is_pushed
+        hardware = HakoHardware(hako_hat, use_starter=args.hako_starter)
 
         result["code"] = run_app(
             prefix="hako",
@@ -118,10 +113,11 @@ def main() -> None:
             tick_interval_sec=_TICK_INTERVAL_SEC,
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
-            starter_is_pushed=starter_is_pushed,
+            hardware_initialize=hardware.initialize,
+            starter_is_pushed=hardware.starter_is_pushed,
             scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
-            radar_base_calibrate=radar_base.calibrate,
-            radar_base_is_calibrated=radar_base.is_calibrated,
+            radar_base_calibrate=hardware.radar_base_calibrate,
+            radar_base_is_calibrated=hardware.radar_base_is_calibrated,
         )
         return 0
 
