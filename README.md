@@ -260,16 +260,17 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 Zenohは「購読を開始した後に届いたpublish」しか受信できず、購読開始前のpublishは再送されない。そのため、**双方のbroker.open()(Zenoh購読)が、お互いの`calibrated`publishより先に完了している必要がある**。
 
-実機側は、`SonarRadarApp`の`INIT`のentryが`broker.open()`を`hardware_initialize()`(Build HATのファームウェアロード等)より先に行うため、実機のハードウェア初期化がどれだけ時間を要しても、実機の購読自体は早い段階で開いている(この点は設計で解消済みで、今は制約にならない)。
+- 実機側は、`SonarRadarApp`の`INIT`のentryが`broker.open()`を`hardware_initialize()`(Build HATのファームウェアロード等)より先に行うため、実機のハードウェア初期化がどれだけ時間を要しても、実機の購読自体は早い段階で開いている(この点は設計で解消済み)。ただし**実機のプロセス自体は、起動したら即座にtickが始まり、途中で止めておくことができない**。
+- Mac(`run_hako.py`)側は、hakopy controllerとして登録されるだけでは`broker.open()`されず、`hako-cmd start`が呼ばれて初めてtickループ(≒`broker.open()`)が動き出す。これはhakopyの仕組み上の制約で、今も残っている。裏を返すと、**`hako-cmd start`は操作者が任意のタイミングで押せる、唯一「待たせておける」開始トリガー**である。
 
-一方Mac(`run_hako.py`)側は、hakopy controllerとして登録されるだけでは`broker.open()`されず、`hako-cmd start`が呼ばれて初めてtickループ(≒`broker.open()`)が動き出す。これはhardware_initializeの話とは別の、hakopyの仕組み上の制約で、今も残っている。したがって、Mac側の`hako-cmd start`を、実機の`calibrated`publishより先に済ませておく必要があり、次の順序を守ること。
+したがって、**leader/followerどちらの役割であっても関係なく、常に実機のプロセスを先に起動し、Macの`hako-cmd start`を最後にする**こと(以前は「leader側を先に」と説明していたが誤りだった。実機がleaderの回でたまたま正しい順序と一致していただけで、Macをleaderにした回で、Macの`hako-cmd start`を先にしてしまい、起動が遅い実機の購読が間に合わず`CALIBRATION_FAILED`になる不具合を実際に踏んだ)。
 
 1. Mac: plantを起動する（上記の2）
-2. Mac: `run_hako.py`を起動する（上記の3、followerなら`--leader`は付けない）
-3. Mac: `hako-cmd start`を実行する（上記の4。ここでMac側の購読が始まる）
-4. 実機: `run_real.py --leader --real-starter --real-radar-base`を実行する（3の直後に。Mac側の購読が実機側のcalibrated publishより先に間に合う）
+2. Mac: `run_hako.py`を起動する（上記の3。leader/followerどちらでもよい、`--leader`の有無で決める）
+3. 実機: `run_real.py --real-starter --real-radar-base`を実行する（leaderなら`--leader`も付ける。**Macの`hako-cmd start`より先に実行すること**。実機の購読はプロセス起動後すぐに開くため、モーター駆動等の時間のかかる初期化が終わる前でも安全）
+4. Mac: `hako-cmd start`を実行する（上記の4。実機が確実に動き出した後で、ここでMac側の購読・publishが始まる）
 
-`--participants`は両者で同じ集合（例: `--participants 2,5`、実機`--origin 2`・Mac`--origin 5`）を指定すること。この順序を守れば、followerであるMac側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
+`--participants`は両者で同じ集合（例: `--participants 2,5`、実機`--origin 2`・Mac`--origin 5`）を指定すること。この順序を守れば、followerである側はstarterの操作なしで、`radar/starter/start`の受信のみで`WAIT_FOR_START_PRESS`から`SCANNING`へ直接遷移する。
 
 観測方法（`watch_state.py`/`watch_all.py`）は「`bridge/`の動作確認（単体、1プロセス自己ループバック）」の節を参照（1台構成でも2台構成でも同じ方法が使え、全origin(マシン)の状態遷移が1つのターミナルに集まる）。
 
