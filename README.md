@@ -143,6 +143,32 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 `bridge/env.sh`は`hakoniwa_pdu_endpoint`用の環境変数(`PYTHONPATH`等)をまとめたもの。Pythonの実行環境自体は`sonar_radar/.venv`（Python 3.12, cffi対応）を流用している(`run_hako.py`のみ、hakopyとPythonバージョンを合わせる都合で`hakoniwa-mujoco-robots/.venv`のPython 3.14を使う。後述)。
 
+### デモ用スクリプト(手順を覚える必要が無い、まずここを見る)
+
+手順を毎回手で組み立てると、`--config`忘れ・`--participants`の指定間違い・
+タイムアウト不揃い等のミスが起きやすいと分かったため、正しいフラグを
+組み込んだ起動スクリプトを`bridge/`に用意してある。以下の手順の詳細
+(順序の理由等)を知りたいときだけ、この後の各節を読めばよい。
+
+| 何をしたいか | 実行する機 | コマンド |
+|---|---|---|
+| 動作シナリオ1(実機単体でのstart確認) | 実機 | `bash bridge/demo_real_leader.bash solo` |
+| 実機+Macの2台構成デモ(実機側) | 実機 | `bash bridge/demo_real_leader.bash`(引数無し=既定`pair`) |
+| 実機+Macの2台構成デモ(Mac側、follower) | Mac | `bash bridge/demo_mac_follower.bash` |
+| 状態遷移の観測(origin付き) | どちらでも | `bash bridge/demo_watch.bash state` |
+| 生のPDUメッセージの観測 | どちらでも | `bash bridge/demo_watch.bash all`(既定) |
+| 残存プロセスの確認・掃除 | どちらでも | `bash bridge/cleanup.bash --dry-run` / `bash bridge/cleanup.bash` |
+
+2台構成デモは、Mac側→`hako-cmd`不要な`run_real.py`同士の組み合わせなら
+上記2つだけでよい。MuJoCoシミュレータ経由(`run_hako.py`)で試したい場合は
+後述の「`bridge/` をMuJoCoシミュレータ(Hakoniwa plant)経由で動かす」を
+参照(plant起動・`hako-cmd start`が別途必要)。
+
+`demo_real_leader.bash`/`demo_mac_follower.bash`は起動前に必ず
+`cleanup.bash`を実行する(観測用ターミナルは`--skip-watchers`で対象外)。
+`bash bridge/demo_real_leader.bash`実行後、`WAIT_FOR_START_PRESS`に
+なったら実機の物理starterボタンを押すこと。
+
 ### `bridge/` の動作確認（単体、1プロセス自己ループバック）
 
 1. zenohdルーターを起動する（`config/mac/zenohd/router.json5`を使用。既に起動中なら不要）。
