@@ -153,6 +153,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 | 何をしたいか | 実行する機 | コマンド |
 |---|---|---|
 | 動作シナリオ1(実機単体でのstart確認) | 実機 | `bash bridge/demo_real_leader.bash solo` |
+| 動作シナリオ2(シミュレータ単体でのstart確認) | Mac | `bash bridge/demo_hako_leader.bash`(要plant起動済み、下記参照) |
 | 実機+Macの2台構成デモ(実機側) | 実機 | `bash bridge/demo_real_leader.bash`(引数無し=既定`pair`) |
 | 実機+Macの2台構成デモ(Mac側、follower) | Mac | `bash bridge/demo_mac_follower.bash` |
 | 状態遷移の観測(origin付き) | どちらでも | `bash bridge/demo_watch.bash state` |
@@ -168,6 +169,13 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 `cleanup.bash`を実行する(観測用ターミナルは`--skip-watchers`で対象外)。
 `bash bridge/demo_real_leader.bash`実行後、`WAIT_FOR_START_PRESS`に
 なったら実機の物理starterボタンを押すこと。
+
+`demo_hako_leader.bash`は、Hakoniwa plant(ビューア付き)が別ターミナルで
+起動済みであることが前提(cleanup.bashを自動実行するとplant/ビューアも
+巻き込んで止めてしまうため、このスクリプトだけは呼ばない)。実行して
+`'SonarRadarZenohBridgeController' 登録完了`と出たら、別ターミナルで
+`hako-cmd start`を実行し、`WAIT_FOR_START_PRESS`になったらMuJoCoビューアの
+ウィンドウでSpaceキーを押すこと。
 
 ### `bridge/` の動作確認（単体、1プロセス自己ループバック）
 
