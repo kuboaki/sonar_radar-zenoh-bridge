@@ -227,6 +227,66 @@ CALIBRATING導入にあたり、実機のハードウェア初期化・キャリ
 
 1プロセス自己ループバック(スタブハードウェア)と実機単体(動作シナリオ1、`demo_real_leader.bash`)で、Build HATファームウェアロード→`CALIBRATING`(実際にモーターホーミング)→`WAIT_FOR_START_PRESS`→`WAIT_FOR_START_RELEASE`→`WAIT_FOR_SCAN_START`→`SCANNING`まで到達することを確認済み。
 
+## マイルストーン4: MARKER_DETECTED以降(detected/stopの対称処理、WAIT_FOR_INVERT、SCAN_FAILED)実装(完了)
+
+### 背景
+
+Astahの状態機械図(`sonar_radar::runのステートマシン図`)は、`MARKER_DETECTED`/`WAIT_FOR_INVERT`/`WAIT_FOR_STOP_PRESS`/`WAIT_FOR_STOP_RELEASE`/`SCAN_FAILED`まで含めて既に設計済みだった(図の変更は不要で、実装のみが追いついていない状態)。Astah MCP経由でプロジェクトファイルから全22遷移を読み取り、ノート(未確定事項の注記含む)も合わせて正確に取得した上で、`bridge/sonar_radar_app.py`に1:1で実装した。
+
+### 実装したもの
+
+start/`WAIT_FOR_SCAN_START`で確立済みの「leaderはローカル検知→publishのみ、実アクションは自分のpublishのループバック受信で行う、followerは受信のみで直接遷移する」パターンを、detected/stopにもそのまま適用した。
+
+- `SCANNING` --[`marker_detector_is_detected()`][`is_leader==true`]--> `MARKER_DETECTED`(entryで`detected`をpublish、2秒タイムアウト)--[`detected`受信]--> `WAIT_FOR_INVERT`(entryで`radar_base_invert_direction()`、無条件で`SCANNING`へ復帰)。followerは`SCANNING`から`WAIT_FOR_INVERT`へ直接遷移し、`MARKER_DETECTED`を経由しない。
+- `SCANNING` --[`starter_is_pushed()`][`is_leader==true`]--> `WAIT_FOR_STOP_PRESS` --[`!starter_is_pushed()`]--> `WAIT_FOR_STOP_RELEASE`(entryで`stop`をpublish、2秒タイムアウト)--[`stop`受信]--> `TERMINATED`。followerは`SCANNING`から`TERMINATED`へ直接遷移する。
+- `WAIT_FOR_SCAN_START`/`MARKER_DETECTED`のタイムアウト(`timer_is_fired()`)は、どちらも`SCAN_FAILED`(entryで失敗通知+`stop`をpublish)へ遷移し、`SCAN_FAILED`は無条件で通常の`WAIT_FOR_STOP_RELEASE`に合流する(自分の`stop`のループバック受信を待ってから`TERMINATED`へ至る、`stop`の二重publish自体は`consume_stop_received()`が真偽フラグのため無害)。
+- `SCANNING` --[`timer_is_fired()`]--> `SCAN_FAILED`という遷移は図に存在していたが、`SCANNING`にはentry/exitでのタイマー起動処理が無く、この遷移が本当に必要かどうか自体が図のノートで「まだわからない」とされていたため、この時点では実装せず`docs/zenoh_state_machine_design.md`の未確定事項に明記するに留めた(このセッションの後半で解決。次の見出し参照)。
+
+### 確認した内容
+
+実際のZenohを使わず、`broker`をスタブ化した検証スクリプトで以下を確認した(publish時に自分自身への即時ループバックをシミュレートする形)。
+
+- leaderのフルサイクル: `INIT`→…→`SCANNING`→(マーカー検出)→`MARKER_DETECTED`→`WAIT_FOR_INVERT`→`SCANNING`→(stop押下)→`WAIT_FOR_STOP_PRESS`→`WAIT_FOR_STOP_RELEASE`→`TERMINATED`
+- followerの直接遷移: `WAIT_FOR_START_PRESS`→`SCANNING`→(detected受信)→`WAIT_FOR_INVERT`→`SCANNING`→(stop受信)→`TERMINATED`(`MARKER_DETECTED`/`WAIT_FOR_STOP_PRESS`を経由しない)
+- `MARKER_DETECTED`のタイムアウト→`SCAN_FAILED`→`WAIT_FOR_STOP_RELEASE`→`TERMINATED`
+
+検証スクリプト自体は一時ファイルでコミットしていない。実機・シムでの実地確認(Zenoh経由)はまだ行っていない。
+
+## SCANNINGのタイムアウト(ケーブル巻き込み防止)を追加(完了)
+
+### 背景
+
+上記マイルストーン4で保留にした`SCANNING`--[`timer_is_fired()`]-->`SCAN_FAILED`遷移について、ユーザーから実装方針の説明を受けた。`CALIBRATING`のタイムアウト(20秒)は「実機で機構のずれを外してはめ直す猶予」だが、`SCANNING`のタイムアウトは目的が逆で、「ドームが旋回しすぎてセンサーケーブルを巻き込む前に止める」ための早期カットオフ。`WAIT_FOR_INVERT`→`SCANNING`の再入がマーカー間の1レッグに対応するため、基準値は「1レッグの所要時間の実測＋α」で決めることにした。
+
+### 実測
+
+**実機**: `~/Projects/sonar_radar/raspi/sonar_radar.py`をそのまま使い、フォースセンサーの物理押下無しで開始・終了できる使い捨て計測スクリプト`/tmp/measure_scan_period.py`(`SpikeHat.force_is_pressed()`をオーバーライドしてボタン押下を自動注入、`sim/sonar_radar_sim.py`の`--auto-start`/`--auto-stop`と同じ技法を実機に適用したもの)を作成し、実機(`192.168.11.3`)で40秒間の連続スキャンを実行。マーカー検出のタイムスタンプから7レッグ分の所要時間を算出し、4.28〜5.28秒(平均約4.77秒)を得た。計測に使ったスクリプトとログ(`/tmp/measure_scan_period.py`, `/tmp/scan_real_timing.json`, `.log`)はユーザーの指示によりPi上の`/tmp`に残してある。
+
+**スタンドアロンSIM**: 同様の計測をMac上のスタンドアロンSIM(`~/Projects/sonar_radar/sim/sonar_radar_sim.py`)でも行うため、まずREADME(`README_ja.md`「スタンドアロンSIMでの実行(MuJoCo)」)記載の手順通りに環境を検証した。`.venv`が`uv venv --python /opt/homebrew/bin/python3.12`で作成されていること(Python 3.12.13)、`mujoco`パッケージとMuJoCo.appのバージョンが一致(3.10.0)していることを確認し、README記載の非インタラクティブ実行例(`python3 sim/sonar_radar_sim.py --auto-start 3 --auto-stop 20`)がそのまま動くことも確認した上で、`--auto-start 2 --auto-stop 45`で40秒超のスキャンを実行。8レッグ分の所要時間は4.95〜4.97秒と非常に安定していた。実機とシムのログ(`/tmp/scan_sim_timing.json`, `.log`, `/tmp/scan_sim_readme_check.json`, `.log`)もユーザーの指示によりMac上の`/tmp`に残してある。
+
+実機とシムの値は近く(最大約5.3秒)、`mujoco_model/studio_to_mujoco.md`に明記された「`--speed`のデフォルトは実時間固定。実機とsimの動作時間を直接比較できることが本プロジェクトの前提」(`[[feedback_sonar_radar_realtime_sim]]`参照)という設計意図が実測でも裏付けられた。
+
+### 決定
+
+最大実測値(約5.3秒) + α(1秒、ユーザー指定。実験不足のための暫定値で実機ではやや大きすぎる可能性があるとの認識、今のところの上限の目安) = **6.3秒**を`SonarRadarApp`の新規コンストラクタ引数`scanning_timeout_sec`のデフォルト値とした。
+
+### 実装したもの
+
+- Astah(`docs/sonar_radar_zenoh_bridge.asta`): `SCANNING`にentry `timer_start(6.3s)`/exit `timer_stop()`を追加。`SCANNING`--[`timer_is_fired()`]-->`SCAN_FAILED`遷移に付いていた「まだわからない」ノートを、上記の決定内容(目的の違い・基準値の根拠)に更新した。
+- `bridge/sonar_radar_app.py`: `scanning_timeout_sec: float = 6.3`をコンストラクタに追加。`SCANNING`のentry(`_transition_to`)で`timer_start(self._scanning_timeout_sec)`、`_tick_scanning`の全ての遷移経路(stop/marker検出/stop受信/detected受信/timer_is_fired)でexitの`timer_stop()`を追加。`WAIT_FOR_INVERT`からの再入時も`_transition_to(State.SCANNING)`経由でタイマーが取り直される。
+- `docs/zenoh_state_machine_design.md`: 未確定事項からこの項目を削除し、「SCANNINGのタイムアウト(ケーブル巻き込み防止)」節を新設して実測値・決定内容を記載した。
+
+### 確認した内容
+
+スタブBrokerでの検証スクリプトに以下を追加して確認した(一時ファイルでコミットしていない)。
+
+- `SCANNING`自体のタイムアウト→`SCAN_FAILED`→`WAIT_FOR_STOP_RELEASE`→`TERMINATED`
+- `WAIT_FOR_INVERT`→`SCANNING`再入時にタイマーが取り直される(2レッグ目の`_timer._deadline`が1レッグ目より後になる)こと
+
+既存の3シナリオ(leaderフルサイクル/followerの直接遷移/`MARKER_DETECTED`タイムアウト)も、exitの`timer_stop()`追加後に再実行し、引き続き成功することを確認した。
+
 ### 次のマイルストーン(継続)
 
-`MARKER_DETECTED` 以降(`detected`の対称処理、`WAIT_FOR_INVERT`、stopの対称処理、`SCAN_FAILED`)。同じ進め方(1状態ずつ実装→実際のZenohで確認)を継続する。
+- `pdu_ros_bridge::sonar_radar_ros_bridge`(ブリッジ/監視役、Raspberry Pi 5想定)の設計・実装。
+- 実機・シムでの`MARKER_DETECTED`以降・`SCANNING`タイムアウトのZenoh経由での実地確認(スタブBrokerでの検証止まりのため)。
+- `scanning_timeout_sec`のα(現在1秒)は実験不足のための暫定値。実機での連続運用を重ねて適切な値に見直す。

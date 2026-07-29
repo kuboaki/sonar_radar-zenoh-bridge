@@ -77,6 +77,17 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 - leader/followerの非対称性: `is_leader == true` のガードが付いた遷移（ローカル検知→publishのみ、状態は進む）と、`○○を受信した` イベントの遷移（実アクション＋状態遷移）が対になっている。followerはローカル検知の遷移を通らず、受信イベントだけで直接目的の状態へ進む（例: `WAIT_FOR_START_PRESS --radar/starter/startを受信した--> SCANNING`）。leader自身も、publishした自分のコマンドを受信して初めて実アクションと状態遷移が起きる（自己ループバックを特別扱いしない）。
 - `INIT`→`CALIBRATING`はマシン間通信を伴わないローカル処理のみで、`WAIT_FOR_START_PRESS`へは無条件（ガードなし）で自動遷移する。leader/followerの非対称性や受信イベント待ちが登場するのは`WAIT_FOR_START_PRESS`以降。
 
+### SCANNINGのタイムアウト(ケーブル巻き込み防止)
+
+`SCANNING`にはentry `timer_start(scanning_timeout_sec)`／exit `timer_stop()`があり、`timer_is_fired()`で`SCAN_FAILED`へ落ちる。`CALIBRATING`のタイムアウト(20秒、`calibration_timeout_sec`)とは目的が逆であることに注意。
+
+- `CALIBRATING`の猶予は「実機で機構のずれを外してはめ直す時間」を見込んだもの。
+- `SCANNING`のタイムアウトは「ドームが旋回しすぎてセンサーケーブルを巻き込む前に止める」ための早期カットオフ。むしろ小さく保ちたい。
+
+基準値は、`WAIT_FOR_INVERT`→`SCANNING`の再入がマーカー間の1レッグに対応することから、「1レッグの所要時間＋α」とした。1レッグの所要時間は、実機(`192.168.11.3`、`sonar_radar/raspi/sonar_radar.py`を自動起動・自動停止するmeasure_scan_period.py経由、7レッグ実測)で4.28〜5.28秒(平均約4.77秒)、スタンドアロンSIM(`sonar_radar/sim/sonar_radar_sim.py --auto-start --auto-stop`、8レッグ実測)で4.95〜4.97秒(非常に安定)だった。シムは実時間(`--speed 1.0`固定)で実機と直接比較できるよう設計されており(`[[feedback_sonar_radar_realtime_sim]]`参照)、実測でもその前提が裏付けられた。
+
+最大実測値(約5.3秒) + α(1秒) = **6.3秒**(`scanning_timeout_sec`のデフォルト値)とした。αは実験不足のための暫定値で、実機ではやや大きすぎる可能性がある(2026-07-29時点の判断、今のところの上限の目安)。
+
 ### PDUトピック一覧
 
 | topic | 意味 | 方向 |
@@ -88,15 +99,12 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 
 ## 未確定・要検討事項
 
-- `SCANNING` の `timer_is_fired()` → `SCAN_FAILED` 遷移: このタイマーがどこで起動されるか（`SCANNING` にはentry/タイマー起動アクションがない）が未確定。
-- `WAIT_FOR_START_PRESS`／`WAIT_FOR_START_RELEASE`／`WAIT_FOR_STOP_PRESS` にタイムアウトが必要かどうか（人やロボットの押下待ちに上限を設けるか）。
+- `WAIT_FOR_START_PRESS`／`WAIT_FOR_START_RELEASE`／`WAIT_FOR_STOP_PRESS` にタイムアウトが必要かどうか(人やロボットの押下待ちに上限を設けるか)。
 - `CALIBRATION_FAILED`／`SCAN_FAILED` の失敗時処理の具体化（コンソールへのエラー出力など、内容未定）。
-- `broker` の実装（`hakoniwa_pdu_endpoint.c_endpoint.Endpoint` のラップ）は未着手。API設計のみ。
 - `pdu_ros_bridge::sonar_radar_ros_bridge`（ブリッジ/監視役）は未設計。
 - Raspberry Pi 5（ブリッジ役）でのhakoniwa-pdu-endpointインストール・本シナリオ向け設定（`config/raspi5/`）は未実施。
 - `sonar_radar` 本体のコミット `038ed15`（旧設計のフック追加）の差し戻しは未実施のまま（`sonar_radar-zenoh-bridge` は無改造の `sonar_radar` に依存する設計のため動作のブロッカーではないが、後片付けとして残っている）。
 - 実機＋シム（＋ブリッジ）でのエンドツーエンド結合テストは未実施。
-- キャリブレーション協調廃止に伴うコード側の追従（`bridge/sonar_radar_app.py`の`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`除去、`bridge/broker.py`の`publish_calibrate`/`publish_calibrated`/`consume_calibrate_received`/`is_calibrated_received_from`除去、`pdu/pdudef.json`の`calibrate`/`calibrated`チャンネル除去、`watch_all.py`の追従）は未実施。図・本ドキュメントが先行しており、実装はこれから。
 
 ## 関連する既存の実装済み部品
 
