@@ -25,14 +25,27 @@
 - ローカルの物理検知（ボタン押下・マーカー検出）とリモートからの受信は、扱いが本質的に異なる。前者は「状態を変えずにpublishするだけ」、後者は「実際にlibspikehatを呼び出し、状態も遷移する」。この2つをステートマシン上で明確に書き分ける必要がある。
 - 複数マシンが同時に同じ物理判断（スタート指示・マーカー識別）をローカルに行うと衝突するため、**leader/follower** の役割分担が必要（`is_leader` 属性）。leaderのみがローカル検知で動作の起点となり、followerはleaderの発行したコマンドの受信のみで追従する。
 
+## 背景: キャリブレーション協調の廃止（2度目の設計転回）
+
+シナリオ1（実機単体）・シナリオ2（シム単体）・実機+Macの2台構成それぞれで動作検証を重ねる過程で、上記の「`calibration_participants`が揃うのを待つ」設計自体が、人の操作速度に依存する形で壊れやすいことが判明した。
+
+- Mac(`run_hako.py`)側は`hako-cmd start`という、人が任意のタイミングで押す唯一の開始トリガーを境にしてしか`broker.open()`(Zenoh購読開始)ができない。この購読開始が遅れている間に、相手側が`calibrated`をpublishしてしまうと、Zenohは購読開始前のpublishを再送しないため一生受信できない。
+- 「実機を先に起動してからMacの`hako-cmd start`を押す」という順序ルールを2度定め直したが、それでも失敗した。実機側のキャリブレーション自体が数秒で終わってしまうため、人がチャット文面を読んで`hako-cmd start`を打鍵する時間より速く完了し、後から購読を開くMac側が結局間に合わなかった。
+- 根本原因は順序の問題ではなく、**「購読開始が人の操作待ちでゲートされている側は、どちらが先でも相手の完了に間に合わない可能性がある」**という構造そのものにあった。
+
+これを受けて、**マシン間のキャリブレーション協調を完全に廃止**する方針に転回した。各マシン（実機・シム）は、人が起動してからキャリブレーションが終わるまでを、他マシンとの通信なしに独立して完結させる。
+
+- `INIT`（`broker.open()` → `hardware_initialize()`）から `CALIBRATING`（ローカルなハードウェアキャリブレーションのみ、ネットワーク協調なし）までを、人が起動してから完了するまで1つの流れに閉じ込め、完了したら自動的に`WAIT_FOR_START_PRESS`へ遷移する。
+- `WAIT_FOR_CALIBRATE`／`WAIT_FOR_CALIBRATED`の2状態、`calibrate`／`calibrated`のPDUメッセージ、`check_calibration_participants()`ガードは全廃した。
+- `CALIBRATION_FAILED`は残す。ただし用途は「マシン間協調の失敗」ではなく「**ローカルなハードウェア障害**（物理的にモーターが固着している等）」に限定し、タイムアウトは20秒とする。
+- `timer_stop()`は、本来「`CALIBRATING`でなくなったら止める」という性質のものなので、`CALIBRATING`のexitのみで呼ぶ（`CALIBRATION_FAILED`のentryでの重複呼び出しはしない）。
+
 ## 用語
 
-- **event**: 状態遷移のトリガーとなる出来事（例: `calibrated` 受信、タイムアウト発火）
+- **event**: 状態遷移のトリガーとなる出来事（例: `radar/starter/start` 受信、タイムアウト発火）
 - **guard**: event 発生時に評価する条件。真のときだけ遷移が成立する（偽なら暗黙に自己ループ）
-- **calibration_participants**: この試行でキャリブレーション報告が必要な origin の集合（静的コンフィギュレーション、例: `{"real", "sim"}`）。`sonar_radar::app::sonar_radar` がINIT時に取得・保持する。
-- **received_origins**: 現在までに `calibrated` を受信した origin の集合（自分自身の発行がループバックしてきた分も含む）。実体は `broker` 側で管理する。
 - **is_leader**: 実機かシムかを問わず、そのインスタンスがスタート指示・マーカー識別など動作のきっかけとなる判断を担うかどうかを表す属性。真ならleader（ローカル検知で動く）、偽ならfollower（受信のみで動く）。初期化時に設定する。
-- **origin**: PDUメッセージの送信元識別子。旧実装の `_ORIGIN = {"real": 1, "sim": 2}` に相当し、`broker.is_calibrated_received_from(origin)` 等で使う。
+- **origin**: PDUメッセージの送信元識別子。`publish_state()`が状態名にoriginを付与する（`watch_state.py`が複数マシンの状態遷移を区別するための観測用途）。キャリブレーション協調の廃止に伴い、origin単位の到達確認（`is_calibrated_received_from`等）は使わなくなった。
 
 ## アーキテクチャ概要
 
@@ -48,9 +61,8 @@
 
 `broker` のAPI（現時点の一次案）:
 
-- `publish_calibrate()` / `publish_calibrated()` / `publish_start()` / `publish_stop()` / `publish_detected()` / `publish_scan(angle, distance_mm)` — ローカル検知側が呼ぶ送信専用API。
+- `publish_start()` / `publish_stop()` / `publish_detected()` / `publish_scan(angle, distance_mm)` — ローカル検知側が呼ぶ送信専用API。
 - `consume_start_received()` / `consume_stop_received()` / `consume_detected_received() : boolean` — tickループ側がポーリングする受信API。Zenohの受信自体は非同期コールバックだが、`broker` 内部でフラグ化し、これらは一度だけ `true` を返して内部フラグをクリアする（旧 `driver/sonar_radar_zenoh.py` の `notify_*()`／自己ループバック対策と同じ考え方）。
-- `is_calibrated_received_from(origin) : boolean` — `calibrated` はcount/booleanでなくorigin単位の到達確認が必要なため専用API。`calibration_participants` 自体は `sonar_radar::app::sonar_radar` 側が保持し、`broker` からの受信状況と突き合わせて `check_calibration_participants()` を判定する。
 
 ## 状態機械（現状）
 
@@ -63,13 +75,12 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 - 各状態で待っている以外のイベントが発生した場合は、明示的に描いていない限り event ignored（無視して自己ループ）として扱う。
 - `starter_is_pushed()`／`marker_detector_is_detected()`／`radar_base_invert_direction()` などのガード・エフェクト表記は、`_` 区切りのC関数名スタイルに統一している（クラス図の「クラス名_メソッド名→関数名」規約に合わせる）。
 - leader/followerの非対称性: `is_leader == true` のガードが付いた遷移（ローカル検知→publishのみ、状態は進む）と、`○○を受信した` イベントの遷移（実アクション＋状態遷移）が対になっている。followerはローカル検知の遷移を通らず、受信イベントだけで直接目的の状態へ進む（例: `WAIT_FOR_START_PRESS --radar/starter/startを受信した--> SCANNING`）。leader自身も、publishした自分のコマンドを受信して初めて実アクションと状態遷移が起きる（自己ループバックを特別扱いしない）。
+- `INIT`→`CALIBRATING`はマシン間通信を伴わないローカル処理のみで、`WAIT_FOR_START_PRESS`へは無条件（ガードなし）で自動遷移する。leader/followerの非対称性や受信イベント待ちが登場するのは`WAIT_FOR_START_PRESS`以降。
 
 ### PDUトピック一覧
 
 | topic | 意味 | 方向 |
 |---|---|---|
-| `radar/dome/calibrate` | キャリブレーション実行指示 | 起動時に各自 or ブリッジから |
-| `radar/dome/calibrated` | 自分のキャリブレーション完了通知 | 実機⇔シム 双方向、対称 |
 | `radar/starter/start` | スキャン開始 | 実機⇔シム⇔ブリッジ、疑似starter、対称 |
 | `radar/starter/stop` | スキャン停止 | 同上 |
 | `radar/detector/detected` | マーカー検出→方向反転 | 実機⇔シム、対称（シナリオにより向きが対になる） |
@@ -85,9 +96,10 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 - Raspberry Pi 5（ブリッジ役）でのhakoniwa-pdu-endpointインストール・本シナリオ向け設定（`config/raspi5/`）は未実施。
 - `sonar_radar` 本体のコミット `038ed15`（旧設計のフック追加）の差し戻しは未実施のまま（`sonar_radar-zenoh-bridge` は無改造の `sonar_radar` に依存する設計のため動作のブロッカーではないが、後片付けとして残っている）。
 - 実機＋シム（＋ブリッジ）でのエンドツーエンド結合テストは未実施。
+- キャリブレーション協調廃止に伴うコード側の追従（`bridge/sonar_radar_app.py`の`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`除去、`bridge/broker.py`の`publish_calibrate`/`publish_calibrated`/`consume_calibrate_received`/`is_calibrated_received_from`除去、`pdu/pdudef.json`の`calibrate`/`calibrated`チャンネル除去、`watch_all.py`の追従）は未実施。図・本ドキュメントが先行しており、実装はこれから。
 
 ## 関連する既存の実装済み部品
 
-- `pdu/pdudef.json`, `pdu/pdutypes.json`: チャンネル構成（calibrate/calibrated/start/stop/detected/scan）は現行設計でも概ね流用できる見込み。
+- `pdu/pdudef.json`, `pdu/pdutypes.json`: チャンネル構成（start/stop/detected/scan）は現行設計でも概ね流用できる見込み。`calibrate`/`calibrated`チャンネルはキャリブレーション協調の廃止により不要になったため、コード追従時に削除する。
 - `config/{mac,raspi4b}/`: zenoh endpoint 設定は流用可能。
 - 旧 `driver/sonar_radar_zenoh.py` の origin識別子（`_ORIGIN = {"real": b"\x01", "sim": b"\x02"}`）による自己判別の仕組み、および非同期コールバックをポーリングフラグに変換する考え方は、`broker` の実装にそのまま使える。このファイル自体は `SonarRadarSM` への依存を含む旧設計のものであり、`broker`／`sonar_radar::app::sonar_radar` を軸に全面的に書き直す。
