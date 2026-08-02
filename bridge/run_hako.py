@@ -87,11 +87,11 @@ def main() -> None:
         help="CALIBRATING(ローカルなハードウェアキャリブレーション)のタイムアウト秒数(既定20秒)",
     )
     parser.add_argument(
-        "--scanning-timeout", type=float, default=12.0,
-        help="SCANNINGのタイムアウト秒数(既定12秒)。ドームが旋回しすぎてセンサー"
-        "ケーブルを巻き込む前に止める早期カットオフだが、シムには実在するケーブル"
-        "が無いため、実機(既定8秒)より余裕を持たせて誤検出を避ける"
-        "(docs/zenoh_state_machine_design.md参照)",
+        "--scanning-timeout", type=float, default=8.0,
+        help="SCANNINGのタイムアウト秒数(既定8秒、run_real.pyと同値)。ドームが"
+        "旋回しすぎてセンサーケーブルを巻き込む前に止める早期カットオフ。"
+        "followerとして相手(leader)のdetectedを待つ場合にも同じタイマーを使う"
+        "ため、leader側の値より短くしてはならない(docs/zenoh_state_machine_design.md参照)",
     )
     parser.add_argument(
         "--publish-confirm-timeout", type=float, default=2.0,
