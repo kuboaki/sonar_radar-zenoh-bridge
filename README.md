@@ -283,7 +283,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 **設計継続（優先）**
 
-1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`/`WAIT_FOR_START_RELEASE`/`SCANNING`（到達まで）は実装・確認済み。`detected`の対称設計、`SCAN_FAILED`等、`MARKER_DETECTED`以降が未確定のまま残っている）
+1. [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) の状態機械設計を継続（`WAIT_FOR_START_PRESS`〜`SCAN_FAILED`まで含め全状態を実装・確認済み。`pdu_ros_bridge::sonar_radar_ros_bridge`、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化などが未確定のまま残っている）
 
 **実装作業（状態機械図を1状態ずつ実装しながら進める方式、進行中。進め方と教訓は[`docs/development_log.md`](docs/development_log.md)を参照）**
 
@@ -296,10 +296,12 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 8. [x] `bridge/hako_radar_base.py`(`HakoRadarBase`)を新設し、MuJoCo(Hakoniwa plant、`sonar_radar_hako.py`を無改造で使用)経由でradar_baseを駆動できるようにした。`real_radar_base.py`と同じく、`motor_run_to_position()`がブロッキング実装のため、`motor_pwm()`/`motor_get_position()`による非ブロッキングのtickベース駆動にしている。
 9. [x] `run_calibration_smoke_test.py`/`run_start_smoke_test.py`とそれぞれのhako版(計4本)を`run_real.py`/`run_hako.py`(共通部分は`app_runner.py`)に統合。個別に育って機能追加漏れ(`--real-radar-base`)が起きた反省から、SonarRadarAppの構築・tickループ・state reportingを1箇所に集約した。あわせて`bridge/hako_starter.py`(`HakoStarter`)を新設し、`real_radar_base.py`/`real_starter.py`がBuild HATへの接続を共有する形に修正(`real_hat.py`)。実機(leader)とMac(follower、シミュレータ)の2台構成で、followerがstarter操作なしで`start`受信のみ`SCANNING`へ直接遷移することを確認済み。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 10. [x] マシン間のキャリブレーション協調（`WAIT_FOR_CALIBRATE`/`WAIT_FOR_CALIBRATED`/`check_calibration_participants()`/`calibrate`・`calibrated`PDU）を廃止し、`INIT → CALIBRATING`（ローカルのみ、マシン間通信なし）→自動的に`WAIT_FOR_START_PRESS`という設計に再転回。`CALIBRATION_FAILED`はローカルなハードウェア障害検出用として存続(タイムアウト20秒)、`timer_stop()`は`CALIBRATING`のexitに一本化。状態機械図・クラス図・`docs/zenoh_state_machine_design.md`・`bridge/`のコード・`pdu/pdutypes.json`・zenoh設定を一通り追従させ、実機単体(動作シナリオ1)・実機+Mac(MuJoCoシム)の2台構成の両方で`CALIBRATING`から`SCANNING`までエラーなく到達することを実地確認済み。経緯は[`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md)「背景: キャリブレーション協調の廃止」、詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
-11. 次のマイルストーン: `MARKER_DETECTED` 以降（`detected`対称処理、`WAIT_FOR_INVERT`、stop対称処理、`SCAN_FAILED`）を同様に1状態ずつ実装し、都度2台構成でも確認する
-12. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
-13. 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`が`sonar_radar`本体向けに提供している「実機・シムで差し替え可能な共通インターフェース」と同様のものを、ブリッジ側の`hardware_initialize`/`radar_base_calibrate`/`radar_base_is_calibrated`/`starter_is_pushed`にも導入する(現状は`run_real.py`/`run_hako.py`でそれぞれ個別に配線している)。
+11. [x] `MARKER_DETECTED`/`WAIT_FOR_INVERT`/stop対称処理/`SCAN_FAILED`を実装。start/`WAIT_FOR_SCAN_START`と同じ「leaderはローカル検知→publishのみ、実アクションは自分のpublishのループバック受信で行う、followerは受信のみで直接遷移する」パターンをそのまま踏襲し、Astah図の全遷移に1:1で実装した。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
+12. [x] 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`と同様の「実機・シムで差し替え可能な共通インターフェース」として`bridge/hardware.py`(`RadarHardware`/`RealHardware`/`HakoHardware`)を新設し、`run_real.py`/`run_hako.py`それぞれの個別配線をここに集約した。
+13. [x] `radar_base`の継続旋回(`run()`/`stop()`/`invert_direction()`)と`marker_detector`(`real_marker_detector.py`/`hako_marker_detector.py`)を実装。マイルストーン11の時点では状態機械のロジックのみでドームを物理的に回す配線が漏れていたことが実機確認で発覚し、追加実装した。実機単体・シム単体・実機+シム2台構成(leader/follower入れ替え含む)で、ドームが実際に旋回しマーカーで反転を繰り返すことを目視確認済み。あわせて、ブリッジ経由のオーバーヘッドを踏まえて`scanning_timeout_sec`の既定値を実機/シムで分離(`--scanning-timeout`、実機8秒/シム12秒)し、タイムアウト値をクラス属性として状態機械図から名前で参照する設計に統一した(`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`)。詳細は[`docs/development_log.md`](docs/development_log.md)「マイルストーン5」を参照。
+14. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
+15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化
 
 ## ステータス
 
-`INIT → CALIBRATING → WAIT_FOR_START_PRESS → WAIT_FOR_START_RELEASE → WAIT_FOR_SCAN_START → SCANNING`（到達まで）を実装・実機/シム双方で実地確認済み。キャリブレーションはマシン間協調を行わないローカル処理に転回済み(#10)。次のマイルストーンは`MARKER_DETECTED`以降(#11)。PDU定義・zenoh設定・Mac/実機のpdu-endpoint環境構築（インフラ部分）は完了済み。旧`driver/sonar_radar_zenoh.py`（`sonar_radar`本体を直接importする転回前の実装）は使わない。
+状態機械図の全状態(`INIT`〜`TERMINATED`、`MARKER_DETECTED`/`WAIT_FOR_INVERT`/stop対称処理/`SCAN_FAILED`を含む)を実装し、実機単体・シム単体・実機+シムの2台構成(leader/follower双方向)で実地確認済み。キャリブレーションはマシン間協調を行わないローカル処理(#10)、ドームの継続旋回・マーカー検出による方向反転も実機で動作確認済み(#13)。次は`pdu_ros_bridge`の設計・実装(#15)。PDU定義・zenoh設定・Mac/実機のpdu-endpoint環境構築（インフラ部分）は完了済み。旧`driver/sonar_radar_zenoh.py`（`sonar_radar`本体を直接importする転回前の実装）は使わない。

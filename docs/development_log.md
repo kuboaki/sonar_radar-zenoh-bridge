@@ -285,7 +285,7 @@ start/`WAIT_FOR_SCAN_START`で確立済みの「leaderはローカル検知→pu
 
 既存の3シナリオ(leaderフルサイクル/followerの直接遷移/`MARKER_DETECTED`タイムアウト)も、exitの`timer_stop()`追加後に再実行し、引き続き成功することを確認した。
 
-## マイルストーン4: radar_baseの継続旋回・marker_detector実装、ブリッジ経由タイムアウトの見直し(完了)
+## マイルストーン5: radar_baseの継続旋回・marker_detector実装、ブリッジ経由タイムアウトの見直し(完了)
 
 ### きっかけ: 「動かない」
 
