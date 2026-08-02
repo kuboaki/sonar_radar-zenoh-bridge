@@ -301,6 +301,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 13. [x] `radar_base`の継続旋回(`run()`/`stop()`/`invert_direction()`)と`marker_detector`(`real_marker_detector.py`/`hako_marker_detector.py`)を実装。マイルストーン11の時点では状態機械のロジックのみでドームを物理的に回す配線が漏れていたことが実機確認で発覚し、追加実装した。実機単体・シム単体・実機+シム2台構成(leader/follower入れ替え含む)で、ドームが実際に旋回しマーカーで反転を繰り返すことを目視確認済み。あわせて、ブリッジ経由のオーバーヘッドを踏まえて`scanning_timeout_sec`の既定値を調整し(`--scanning-timeout`で実機/シムそれぞれ個別に上書き可能)、タイムアウト値をクラス属性として状態機械図から名前で参照する設計に統一した(`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`)。当初実機8秒/シム12秒と分けたが、followerのタイムアウトがleaderより短いとleaderがまだ正常範囲内でもfollowerが先に見切りをつけてしまう問題が判明し、両者とも8秒に統一した(2026-08-03)。詳細は[`docs/development_log.md`](docs/development_log.md)「マイルストーン5」「マイルストーン6」を参照。
 14. [x] Raspberry Pi 5(`192.168.11.4`、ホスト名`ubuntu-desktop`)を実機・Macと同じネットワークへ接続し、`sonar_radar-zenoh-bridge`をクローン。`config/raspi5/`(`config/raspi4b/`と同形、Zenoh接続先はこのMac`192.168.11.2`)を新設した。`hakoniwa-core-pro`/`hakoniwa-pdu-endpoint`/`hakoniwa-pdu-ros`は以前のセッションで導入・ビルド済みであることを確認済み(汎用サンプル設定のみ残っていたので、sonar_radar向けの設定に置き換えた)。
 15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化
+16. クラス図: `sonar_radar`クラスの構成(composition)に`marker_detector`/`scanner`が抜けている(`unit`パッケージには5クラスあるが、`sonar_radar`から実際にcompositionが貼られているのは`radar_base`/`radar_dome`/`starter`の3つのみ)。`pdu_ros_bridge`のクラス図作業時に気づいた既存の抜けで、別途直す。
 
 ## ステータス
 
