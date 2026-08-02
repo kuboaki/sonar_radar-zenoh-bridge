@@ -37,30 +37,38 @@ start/WAIT_FOR_SCAN_STARTと同じ「leaderはローカル検知→publishのみ
 followerは受信のみで直接遷移する」パターンをそのまま踏襲する。
 
 - SCANNING --[marker_detector_is_detected()][is_leader==true]--> MARKER_DETECTED
-  (entryでdetectedをpublish、2秒タイムアウト付き)
+  (entryでdetectedをpublish、publish_confirm_timeout_sec付き)
   --[detectedを受信した]--> WAIT_FOR_INVERT(entryでradar_base_invert_direction()、
   無条件でSCANNINGへ戻る)。followerはSCANNINGから直接
   --[detectedを受信した]--> WAIT_FOR_INVERTへ進む(MARKER_DETECTEDを経由しない)。
 - SCANNING --[starter_is_pushed()][is_leader==true]--> WAIT_FOR_STOP_PRESS
   --[!starter_is_pushed()]--> WAIT_FOR_STOP_RELEASE(entryでstopをpublish、
-  2秒タイムアウト付き)--[stopを受信した]--> TERMINATED。followerはSCANNING
-  から直接--[stopを受信した]--> TERMINATEDへ進む。
+  publish_confirm_timeout_sec付き)--[stopを受信した]--> TERMINATED。followerは
+  SCANNINGから直接--[stopを受信した]--> TERMINATEDへ進む。
 - SCAN_FAILED(entryでスキャン失敗を通知+stopをpublish)は、
   WAIT_FOR_SCAN_START/MARKER_DETECTEDのタイムアウトから到達し、
   無条件でWAIT_FOR_STOP_RELEASEへ進む(通常のstop対称処理に合流し、
   自分のstopのループバック受信を待ってからTERMINATEDへ至る)。
 
+publish_confirm_timeout_sec(既定2秒)は、WAIT_FOR_SCAN_START/
+MARKER_DETECTED/WAIT_FOR_STOP_RELEASEに共通の「自分のpublishが
+ループバックしてくるのを待つ」タイムアウト。3状態とも目的が同じ
+(Zenoh経由の自己確認)なので1つの属性にまとめている。
+
 SCANNING --[timer_is_fired()]--> SCAN_FAILED (scanning_timeout_sec、
-既定6.3秒)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
+既定8秒)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
 CALIBRATINGの20秒は「機構のずれを実機で外してはめ直す猶予」だが、
-SCANNINGの6.3秒は「ドームが旋回しすぎてセンサーケーブルを巻き込む前に
-止める」ための早期カットオフ。基準値は実機実測(マーカー間1レッグの
-所要時間、複数回計測で最大約5.3秒。シム側も実時間設計により同程度)に
-α=1秒を足したもの(2026-07-29計測、docs/development_log.md参照)。
-αは実験不足のための暫定値で、実機ではやや大きすぎる可能性がある
-(今のところの上限の目安)。entryでtimer_start(scanning_timeout_sec)、
-exitでtimer_stop()を行う(WAIT_FOR_INVERTからの再入時も含め、SCANNING
-に入るたび1レッグ分としてタイマーを取り直す)。
+SCANNINGのタイムアウトは「ドームが旋回しすぎてセンサーケーブルを
+巻き込む前に止める」ための早期カットオフ。基準値は実機実測(マーカー間
+1レッグの所要時間、複数回計測で最大約5.3秒。シム側も実時間設計により
+同程度)に、ブリッジ経由のオーバーヘッド(Zenoh送受信・tickループ等、
+実測+1〜1.5秒程度)を加味したもの(2026-07-29/08-02計測、
+docs/development_log.md参照)。ケーブル巻き込みリスクは実機だけの制約
+でシムには無いため、既定値はrun_real.py/run_hako.pyそれぞれの
+--scanning-timeoutで実機は8秒・シムは12秒に分けている(このクラス
+自体の既定値8秒は安全側=実機に合わせたもの)。entryでtimer_start
+(scanning_timeout_sec)、exitでtimer_stop()を行う(WAIT_FOR_INVERTからの
+再入時も含め、SCANNINGに入るたび1レッグ分としてタイマーを取り直す)。
 """
 
 from __future__ import annotations
@@ -110,7 +118,8 @@ class SonarRadarApp:
         radar_base_stop: Optional[Callable[[], None]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 20.0,
-        scanning_timeout_sec: float = 6.3,
+        scanning_timeout_sec: float = 8.0,
+        publish_confirm_timeout_sec: float = 2.0,
     ) -> None:
         # brokerはコンストラクタで構築済み(集約、生成・破棄は呼び出し側の
         # 責務)だが、まだopen()していないものを受け取る。open()はINITの
@@ -125,6 +134,7 @@ class SonarRadarApp:
         self._state = State.INIT
         self._calibration_timeout_sec = calibration_timeout_sec
         self._scanning_timeout_sec = scanning_timeout_sec
+        self._publish_confirm_timeout_sec = publish_confirm_timeout_sec
         # 実機とシミュレータでは、ハードウェア初期化の中身も外見も異なる
         # (実機: ファームウェアロード等の複数手順・ブロッキング、
         # シミュレータ: 実質的な待ちが無い変数設定)ため、radar_base_*等と
@@ -343,18 +353,18 @@ class SonarRadarApp:
             print("[sonar_radar_app] entry: キャリブレーション失敗を通知")
         elif new_state is State.WAIT_FOR_SCAN_START:
             self._broker.publish_start()  # entry
-            self.timer_start(2.0)  # entry
+            self.timer_start(self._publish_confirm_timeout_sec)  # entry
         elif new_state is State.SCANNING:
             self.radar_base_run()  # entry
             self.timer_start(self._scanning_timeout_sec)  # entry
         elif new_state is State.MARKER_DETECTED:
             self._broker.publish_detected()  # entry
-            self.timer_start(2.0)  # entry
+            self.timer_start(self._publish_confirm_timeout_sec)  # entry
         elif new_state is State.WAIT_FOR_INVERT:
             self.radar_base_invert_direction()  # entry
         elif new_state is State.WAIT_FOR_STOP_RELEASE:
             self._broker.publish_stop()  # entry
-            self.timer_start(2.0)  # entry
+            self.timer_start(self._publish_confirm_timeout_sec)  # entry
         elif new_state is State.SCAN_FAILED:
             print("[sonar_radar_app] entry: スキャン失敗を通知")
             self._broker.publish_stop()  # entry

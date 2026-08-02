@@ -77,16 +77,28 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 - leader/followerの非対称性: `is_leader == true` のガードが付いた遷移（ローカル検知→publishのみ、状態は進む）と、`○○を受信した` イベントの遷移（実アクション＋状態遷移）が対になっている。followerはローカル検知の遷移を通らず、受信イベントだけで直接目的の状態へ進む（例: `WAIT_FOR_START_PRESS --radar/starter/startを受信した--> SCANNING`）。leader自身も、publishした自分のコマンドを受信して初めて実アクションと状態遷移が起きる（自己ループバックを特別扱いしない）。
 - `INIT`→`CALIBRATING`はマシン間通信を伴わないローカル処理のみで、`WAIT_FOR_START_PRESS`へは無条件（ガードなし）で自動遷移する。leader/followerの非対称性や受信イベント待ちが登場するのは`WAIT_FOR_START_PRESS`以降。
 
+### タイマー値は属性名で参照する(即値を図に書かない)
+
+`calibration_timeout_sec`／`scanning_timeout_sec`／`publish_confirm_timeout_sec`は、いずれも`sonar_radar::app::sonar_radar`クラスの属性(クラス図参照、既定値付き)であり、`CLI引数 > コンストラクタ引数 > クラス属性(既定値) > 状態機械図はその属性名を参照`という階層になっている。状態機械図のentryも`timer_start(20s)`のような即値ではなく、`timer_start(calibration_timeout_sec)`のように属性名で書く(以前は即値のままだったが、実測に基づく調整を重ねる中で、コード側は既に属性化されているのに図だけ即値のままという食い違いに気づき、2026-08-02に図側も揃えた)。
+
+`publish_confirm_timeout_sec`(既定2秒)は、`WAIT_FOR_SCAN_START`／`MARKER_DETECTED`／`WAIT_FOR_STOP_RELEASE`の3状態に共通の値。3状態とも「自分のpublishがZenoh経由でループバックしてくるのを待つ」という同じ目的のため、個別の属性に分けず1つにまとめている。
+
 ### SCANNINGのタイムアウト(ケーブル巻き込み防止)
 
 `SCANNING`にはentry `timer_start(scanning_timeout_sec)`／exit `timer_stop()`があり、`timer_is_fired()`で`SCAN_FAILED`へ落ちる。`CALIBRATING`のタイムアウト(20秒、`calibration_timeout_sec`)とは目的が逆であることに注意。
 
 - `CALIBRATING`の猶予は「実機で機構のずれを外してはめ直す時間」を見込んだもの。
-- `SCANNING`のタイムアウトは「ドームが旋回しすぎてセンサーケーブルを巻き込む前に止める」ための早期カットオフ。むしろ小さく保ちたい。
+- `SCANNING`のタイムアウトは「ドームが旋回しすぎてセンサーケーブルを巻き込む前に止める」ための早期カットオフ。むしろ小さく保ちたい。ただしこのリスクは実機だけの物理的な制約で、シムには実在するケーブルが無い。
 
-基準値は、`WAIT_FOR_INVERT`→`SCANNING`の再入がマーカー間の1レッグに対応することから、「1レッグの所要時間＋α」とした。1レッグの所要時間は、実機(`192.168.11.3`、`sonar_radar/raspi/sonar_radar.py`を自動起動・自動停止するmeasure_scan_period.py経由、7レッグ実測)で4.28〜5.28秒(平均約4.77秒)、スタンドアロンSIM(`sonar_radar/sim/sonar_radar_sim.py --auto-start --auto-stop`、8レッグ実測)で4.95〜4.97秒(非常に安定)だった。シムは実時間(`--speed 1.0`固定)で実機と直接比較できるよう設計されており(`[[feedback_sonar_radar_realtime_sim]]`参照)、実測でもその前提が裏付けられた。
+基準値は、`WAIT_FOR_INVERT`→`SCANNING`の再入がマーカー間の1レッグに対応することから、「1レッグの所要時間＋マージン」とした。1レッグの所要時間は、実機(`192.168.11.3`、`sonar_radar/raspi/sonar_radar.py`を自動起動・自動停止するmeasure_scan_period.py経由、7レッグ実測)で4.28〜5.28秒(平均約4.77秒)、スタンドアロンSIM(`sonar_radar/sim/sonar_radar_sim.py --auto-start --auto-stop`、8レッグ実測)で4.95〜4.97秒(非常に安定)だった。シムは実時間(`--speed 1.0`固定)で実機と直接比較できるよう設計されており(`[[feedback_sonar_radar_realtime_sim]]`参照)、実測でもその前提が裏付けられた。
 
-最大実測値(約5.3秒) + α(1秒) = **6.3秒**(`scanning_timeout_sec`のデフォルト値)とした。αは実験不足のための暫定値で、実機ではやや大きすぎる可能性がある(2026-07-29時点の判断、今のところの上限の目安)。
+**ブリッジ経由では、単体計測より+1〜1.5秒程度のオーバーヘッドが乗る**ことが、実機+シムの2台構成テスト(2026-08-02)で判明した。当初「最大実測値(約5.3秒)+α(1秒)=6.3秒」と決めたが、これは単体計測(Zenoh/ブリッジのtickループを介さない`sonar_radar.py`直接実行)の値であり、ブリッジ経由の実際のマーカー間隔はこれより長く(6〜6.4秒程度観測)、6.3秒では実機・シムを跨いだ2台構成でまれに正常な周回がタイムアウトしてしまうことがあった(follower実機が6.3秒で`SCAN_FAILED`に落ち、その`stop`をleader(シム)が受信してSCANNINGから直接TERMINATEDへ落ちる、という経路。設計通りの停止伝播ではあるが、本来失敗ではない周回を失敗扱いしてしまっていた)。
+
+ケーブル巻き込みリスクが実機だけの制約であることを踏まえ、**既定値を実機とシムで分けた**:
+
+- `sonar_radar::app::sonar_radar`クラス自体の既定値: **8秒**(安全側、実機に合わせる)
+- `bridge/run_real.py`の`--scanning-timeout`既定値: **8秒**
+- `bridge/run_hako.py`の`--scanning-timeout`既定値: **12秒**(シムはケーブルが無いので余裕を持たせ、誤検出によるSCAN_FAILEDを避ける)
 
 ### radar_baseの継続旋回(run/stop/invert_direction)
 

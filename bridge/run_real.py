@@ -78,10 +78,16 @@ def main() -> int:
         "entryで行われるため、初期化中もstart/stop/detected等の受信は取りこぼさない)",
     )
     parser.add_argument(
-        "--scanning-timeout", type=float, default=6.3,
-        help="SCANNINGのタイムアウト秒数(既定6.3秒)。ドームが旋回しすぎてセンサー"
-        "ケーブルを巻き込む前に止めるための早期カットオフ(実機実測+マージン、"
-        "docs/zenoh_state_machine_design.md参照)",
+        "--scanning-timeout", type=float, default=8.0,
+        help="SCANNINGのタイムアウト秒数(既定8秒)。ドームが旋回しすぎてセンサー"
+        "ケーブルを巻き込む前に止めるための早期カットオフ(実機実測+ブリッジ"
+        "経由のオーバーヘッド込み、docs/zenoh_state_machine_design.md参照)。"
+        "ケーブル巻き込みリスクは実機のみの制約のため、シム側より小さめの既定値",
+    )
+    parser.add_argument(
+        "--publish-confirm-timeout", type=float, default=2.0,
+        help="WAIT_FOR_SCAN_START/MARKER_DETECTED/WAIT_FOR_STOP_RELEASE共通の"
+        "タイムアウト秒数(既定2秒)。自分のpublishがループバックしてくるのを待つ",
     )
     args = parser.parse_args()
 
@@ -110,6 +116,7 @@ def main() -> int:
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
             scanning_timeout_sec=args.scanning_timeout,
+            publish_confirm_timeout_sec=args.publish_confirm_timeout,
             hardware_initialize=hardware.initialize,
             starter_is_pushed=starter_is_pushed,
             marker_detector_is_detected=hardware.marker_detector_is_detected,

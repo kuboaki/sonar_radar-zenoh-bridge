@@ -87,10 +87,16 @@ def main() -> None:
         help="CALIBRATING(ローカルなハードウェアキャリブレーション)のタイムアウト秒数(既定20秒)",
     )
     parser.add_argument(
-        "--scanning-timeout", type=float, default=6.3,
-        help="SCANNINGのタイムアウト秒数(既定6.3秒)。ドームが旋回しすぎてセンサー"
-        "ケーブルを巻き込む前に止めるための早期カットオフ(実機実測+マージン、"
-        "docs/zenoh_state_machine_design.md参照)",
+        "--scanning-timeout", type=float, default=12.0,
+        help="SCANNINGのタイムアウト秒数(既定12秒)。ドームが旋回しすぎてセンサー"
+        "ケーブルを巻き込む前に止める早期カットオフだが、シムには実在するケーブル"
+        "が無いため、実機(既定8秒)より余裕を持たせて誤検出を避ける"
+        "(docs/zenoh_state_machine_design.md参照)",
+    )
+    parser.add_argument(
+        "--publish-confirm-timeout", type=float, default=2.0,
+        help="WAIT_FOR_SCAN_START/MARKER_DETECTED/WAIT_FOR_STOP_RELEASE共通の"
+        "タイムアウト秒数(既定2秒)。自分のpublishがループバックしてくるのを待つ",
     )
     args = parser.parse_args()
 
@@ -120,6 +126,7 @@ def main() -> None:
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
             scanning_timeout_sec=args.scanning_timeout,
+            publish_confirm_timeout_sec=args.publish_confirm_timeout,
             hardware_initialize=hardware.initialize,
             starter_is_pushed=hardware.starter_is_pushed,
             marker_detector_is_detected=hardware.marker_detector_is_detected,

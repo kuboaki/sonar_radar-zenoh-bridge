@@ -285,8 +285,58 @@ start/`WAIT_FOR_SCAN_START`で確立済みの「leaderはローカル検知→pu
 
 既存の3シナリオ(leaderフルサイクル/followerの直接遷移/`MARKER_DETECTED`タイムアウト)も、exitの`timer_stop()`追加後に再実行し、引き続き成功することを確認した。
 
+## マイルストーン4: radar_baseの継続旋回・marker_detector実装、ブリッジ経由タイムアウトの見直し(完了)
+
+### きっかけ: 「動かない」
+
+前マイルストーンではSCANNING/MARKER_DETECTED以降の状態機械ロジックのみが実装されており、`radar_base.run()`(継続旋回の開始)がどこからも呼ばれておらず、`invert_direction()`も未実装スタブ(`NotImplementedError`)のままだった。実機での動作確認中、ユーザーから「スターターのボタンを押しましたが。動かないです」との報告を受けて発覚した。
+
+### 実装したもの
+
+- `real_radar_base.py`/`hako_radar_base.py`: `run()`(冪等、既に回転中なら何もしない)/`stop()`/`invert_direction()`(PWM符号反転、停止せず継続。`sonar_radar.py`の`_tick_scanning()`と同じ設計)を実装。
+- `real_marker_detector.py`/`hako_marker_detector.py`新設: `sonar_radar.py`の`is_red()`/`is_blue()`しきい値と、立ち上がりエッジ検出(`_on_marker`)を移植。
+- `hardware.py`: `RadarHardware`に`radar_base_run`/`radar_base_stop`/`radar_base_invert_direction`/`marker_detector_is_detected`を追加。`marker_detector`はradar_baseと同じ物理ドーム上にあるため、既存の`use_radar_base`(実機)/常時(シム)のフラグに連動させ、新規フラグは追加しなかった。
+- Astah図: `SCANNING`のentryに`radar_base_run()`、`TERMINATED`のentryに`radar_base_stop()`を追加(クラス図で`radar_base`の操作名を再確認した上で、`クラス名_メソッド名`規約に沿って命名)。
+
+### 確認した内容
+
+実機単体で、ドームが実際に旋回し、マーカーで5回連続して方向反転するのを目視確認。シム単体(ビューア)でも同様に確認。
+
+### leader/follower交代テストで判明した問題: ブリッジ経由のオーバーヘッド
+
+実機とMac(シム)のleader/followerを入れ替えて2台構成テストを行ったところ、2周目でfollower(実機)が`scanning_timeout_sec`(6.3秒)でタイムアウトし`SCAN_FAILED`に落ちた。一方、leader(Mac)側のログには対応する`SCAN_FAILED`表示が無く、`SCANNING`から直接`TERMINATED`へ落ちていて、一見不可解に見えた。
+
+**診断**: バグではなく、設計通りの停止伝播経路だった。follower(実機)が自身の`scanning_timeout_sec`で`SCAN_FAILED`に落ち、そのentryで`stop`をpublishする。leader(まだ`SCANNING`中)がそれを受信し、`_tick_scanning()`の`consume_stop_received()`分岐で`SCANNING`から直接`TERMINATED`へ遷移する(follower側のstop受信パターンと同じ経路)。ここまでは正しく機能していた。
+
+**根本原因**: `scanning_timeout_sec`の基準値(6.3秒 = 単体計測の最大実測5.3秒 + α1秒)が、ブリッジのtickループ・Zenoh送受信を介さない**単体計測**(`sonar_radar.py`を直接実行する`measure_scan_period.py`/`sonar_radar_sim.py --auto-start`)を基準にしていたこと。**ブリッジ経由の実際の1レッグは、単体計測より+1〜1.5秒程度長くなる**(6〜6.4秒程度観測)ことが今回初めてわかった。6.3秒という基準値ではマージンが無く、ドームの動き自体には詰まりや異常が無い(目視確認済み)正常な周回でも、まれにタイムアウトしてしまっていた。
+
+### 対応1: 実機/シムでタイムアウト値を分離
+
+ケーブル巻き込みリスクは実機だけの物理的制約で、シムには実在するケーブルが無いことに気づき、既定値を実機/シムで分けた。
+
+- `sonar_radar::app::sonar_radar`クラス自体の既定値: **8秒**(安全側、実機に合わせる)
+- `bridge/run_real.py`の`--scanning-timeout`既定値: **8秒**
+- `bridge/run_hako.py`の`--scanning-timeout`既定値: **12秒**(シムはケーブルが無いので余裕を持たせ、誤検出によるSCAN_FAILEDを避ける)
+
+### 対応2: タイマー値は属性名で図に書く、という設計原則の明確化
+
+この過程で、「CLI引数 > コンストラクタ引数 > クラス属性(既定値) > 状態機械図はその属性名を参照」という一貫した階層にすべき、との指摘を受けた。`calibration_timeout_sec`/`scanning_timeout_sec`はコード側では既に属性化されていたが、状態機械図には`timer_start(20s)`のように即値のまま書かれており、コードと図が食い違っていた。また`WAIT_FOR_SCAN_START`/`MARKER_DETECTED`/`WAIT_FOR_STOP_RELEASE`の3箇所の`timer_start(2.0)`は、コード側でも名前付き属性になっておらず、単なるハードコードされたリテラルだった。
+
+対応:
+
+- クラス図の`sonar_radar`クラスに`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`の3属性(型`double`、既定値付き)を追加した。
+- 状態機械図の該当entryを、即値ではなく属性名の参照に統一した(`timer_start(20s)` → `timer_start(calibration_timeout_sec)`等)。
+- 上記3状態の`timer_start(2.0)`は、いずれも「自分のpublishがループバックしてくるのを待つ」という同じ目的なので、個別の属性に分けず1つの共通属性`publish_confirm_timeout_sec`(既定2秒)にまとめた。
+
+### 得られた教訓
+
+11. **単体計測とブリッジ経由の計測は別物であり、タイムアウト値の基準にする際はどちらで計測したかを明記する必要がある。** 今回、`measure_scan_period.py`/`sonar_radar_sim.py --auto-start`による単体計測(Zenoh・ブリッジのtickループを介さない)を基準に決めた`scanning_timeout_sec`が、実際のブリッジ経由の運用では+1〜1.5秒のオーバーヘッドを見込めておらず、マージン不足だった。単体計測は「純粋な物理的所要時間」を知るには有用だが、実運用のタイムアウト値を決める際は、実際に使う経路(ブリッジ経由)で計測するか、経路のオーバーヘッド分を上乗せする必要がある。
+
+12. **物理的な安全マージンと、シミュレーションでの利便性は、要求が逆になることがある。** `scanning_timeout_sec`の「ケーブル巻き込み防止」という目的は実機だけの物理的制約であり、シムには実在するケーブルが無い。実機は安全側で小さく、シムは誤検出を避けるため大きく、という非対称な既定値が正解だった。1つの属性の「正しい既定値」を機械的に1つに決めようとせず、「その制約が本当に両方の環境に当てはまるか」を先に問うべきだった。
+
+13. **タイムアウト値をコンストラクタ引数として注入可能にしただけでは不十分で、状態機械図の表記もそれに追従させる必要がある。** `calibration_timeout_sec`は早い段階で属性化されていたが、状態機械図のentry表記は最後まで`timer_start(20s)`という即値のままだった。「CLI引数 > コンストラクタ引数 > クラス属性 > 図はその属性名を参照」という階層を、コードだけでなく図にも一貫させることで、値を1箇所(クラス属性の初期値)変えるだけで設計全体の記述が揃う。
+
 ### 次のマイルストーン(継続)
 
 - `pdu_ros_bridge::sonar_radar_ros_bridge`(ブリッジ/監視役、Raspberry Pi 5想定)の設計・実装。
-- 実機・シムでの`MARKER_DETECTED`以降・`SCANNING`タイムアウトのZenoh経由での実地確認(スタブBrokerでの検証止まりのため)。
-- `scanning_timeout_sec`のα(現在1秒)は実験不足のための暫定値。実機での連続運用を重ねて適切な値に見直す。
+- `scanning_timeout_sec`の新しい既定値(実機8秒/シム12秒)も、あくまで今回の限られた実測に基づく暫定値。実機での連続運用・より多くのサンプルを重ねて適切な値に見直す。

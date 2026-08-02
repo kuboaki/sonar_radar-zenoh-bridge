@@ -65,7 +65,8 @@ def run_app(
     tick_interval_sec: float,
     overall_timeout_sec: float,
     calibration_timeout_sec: float = 20.0,
-    scanning_timeout_sec: float = 6.3,
+    scanning_timeout_sec: float = 8.0,
+    publish_confirm_timeout_sec: float = 2.0,
     hardware_initialize: Optional[Callable[[], None]] = None,
     starter_is_pushed: Optional[Callable[[], bool]] = None,
     marker_detector_is_detected: Optional[Callable[[], bool]] = None,
@@ -111,6 +112,7 @@ def run_app(
         scanner_get_distance=scanner_get_distance,
         calibration_timeout_sec=calibration_timeout_sec,
         scanning_timeout_sec=scanning_timeout_sec,
+        publish_confirm_timeout_sec=publish_confirm_timeout_sec,
     )
 
     def _report(state: State) -> None:
