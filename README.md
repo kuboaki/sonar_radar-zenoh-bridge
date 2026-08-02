@@ -299,8 +299,8 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 11. [x] `MARKER_DETECTED`/`WAIT_FOR_INVERT`/stop対称処理/`SCAN_FAILED`を実装。start/`WAIT_FOR_SCAN_START`と同じ「leaderはローカル検知→publishのみ、実アクションは自分のpublishのループバック受信で行う、followerは受信のみで直接遷移する」パターンをそのまま踏襲し、Astah図の全遷移に1:1で実装した。詳細は[`docs/development_log.md`](docs/development_log.md)を参照。
 12. [x] 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`と同様の「実機・シムで差し替え可能な共通インターフェース」として`bridge/hardware.py`(`RadarHardware`/`RealHardware`/`HakoHardware`)を新設し、`run_real.py`/`run_hako.py`それぞれの個別配線をここに集約した。
 13. [x] `radar_base`の継続旋回(`run()`/`stop()`/`invert_direction()`)と`marker_detector`(`real_marker_detector.py`/`hako_marker_detector.py`)を実装。マイルストーン11の時点では状態機械のロジックのみでドームを物理的に回す配線が漏れていたことが実機確認で発覚し、追加実装した。実機単体・シム単体・実機+シム2台構成(leader/follower入れ替え含む)で、ドームが実際に旋回しマーカーで反転を繰り返すことを目視確認済み。あわせて、ブリッジ経由のオーバーヘッドを踏まえて`scanning_timeout_sec`の既定値を実機/シムで分離(`--scanning-timeout`、実機8秒/シム12秒)し、タイムアウト値をクラス属性として状態機械図から名前で参照する設計に統一した(`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`)。詳細は[`docs/development_log.md`](docs/development_log.md)「マイルストーン5」を参照。
-14. `config/raspi5/`（`hakoniwa-pdu-ros` bridge用設定）の作成、ROSトピックとしてのモニタリング確認(ブリッジ役が実際に必要になった段階で着手)
-15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化
+14. [x] Raspberry Pi 5(`192.168.11.4`、ホスト名`ubuntu-desktop`)を実機・Macと同じネットワークへ接続し、`sonar_radar-zenoh-bridge`をクローン。`config/raspi5/`(`config/raspi4b/`と同形、Zenoh接続先はこのMac`192.168.11.2`)を新設した。`hakoniwa-core-pro`/`hakoniwa-pdu-endpoint`/`hakoniwa-pdu-ros`は以前のセッションで導入・ビルド済みであることを確認済み(汎用サンプル設定のみ残っていたので、sonar_radar向けの設定に置き換えた)。
+15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化
 
 ## ステータス
 

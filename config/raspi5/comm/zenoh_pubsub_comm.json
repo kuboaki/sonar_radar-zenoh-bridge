@@ -1,0 +1,23 @@
+{
+  "protocol": "zenoh",
+  "name": "zenoh_pubsub",
+  "direction": "inout",
+  "zenoh": {
+    "config_path": "zenoh/client.json5",
+    "key_prefix": "radar",
+    "io": {
+      "robots": [
+        {
+          "name": "Radar",
+          "pdu": [
+            { "name": "start",      "notify_on_recv": true },
+            { "name": "stop",       "notify_on_recv": true },
+            { "name": "detected",   "notify_on_recv": true },
+            { "name": "scan",       "notify_on_recv": true },
+            { "name": "state",      "notify_on_recv": true }
+          ]
+        }
+      ]
+    }
+  }
+}

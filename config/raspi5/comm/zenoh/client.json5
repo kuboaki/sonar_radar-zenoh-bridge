@@ -1,0 +1,10 @@
+{
+  // デモ会場用の実験ルーター(上流インターネット無し)。Mac (zenohd) のLAN IP。
+  // 使うときは: cp client.demo.json5 client.json5
+  mode: "client",
+  connect: {
+    endpoints: [
+      "tcp/192.168.11.2:7447"
+    ]
+  }
+}
