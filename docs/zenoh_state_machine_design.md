@@ -88,6 +88,10 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 
 最大実測値(約5.3秒) + α(1秒) = **6.3秒**(`scanning_timeout_sec`のデフォルト値)とした。αは実験不足のための暫定値で、実機ではやや大きすぎる可能性がある(2026-07-29時点の判断、今のところの上限の目安)。
 
+### radar_baseの継続旋回(run/stop/invert_direction)
+
+`SCANNING`のentryには`radar_base_run()`もある(`timer_start(scanning_timeout_sec)`と並べて)。`radar_base_run()`は冪等(既に回転中なら何もしない)で、`WAIT_FOR_INVERT`から`SCANNING`へ戻るたびに呼ばれても再始動しない。回転の停止は`TERMINATED`のentryで`radar_base_stop()`を1箇所だけ呼ぶ(`broker.close()`／`timer_destroy()`と並べて)。マーカー検出による方向転換(`WAIT_FOR_INVERT`のentry `radar_base_invert_direction()`)は、停止せずPWM符号を反転するだけで継続する(`sonar_radar.py`の`_tick_scanning()`と同じ設計)。
+
 ### PDUトピック一覧
 
 | topic | 意味 | 方向 |

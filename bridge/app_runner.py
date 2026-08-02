@@ -65,12 +65,15 @@ def run_app(
     tick_interval_sec: float,
     overall_timeout_sec: float,
     calibration_timeout_sec: float = 20.0,
+    scanning_timeout_sec: float = 6.3,
     hardware_initialize: Optional[Callable[[], None]] = None,
     starter_is_pushed: Optional[Callable[[], bool]] = None,
     marker_detector_is_detected: Optional[Callable[[], bool]] = None,
     radar_base_invert_direction: Optional[Callable[[], None]] = None,
     radar_base_calibrate: Optional[Callable[[], None]] = None,
     radar_base_is_calibrated: Optional[Callable[[], bool]] = None,
+    radar_base_run: Optional[Callable[[], None]] = None,
+    radar_base_stop: Optional[Callable[[], None]] = None,
     scanner_get_distance: Optional[Callable[[], int]] = None,
 ) -> int:
     """SonarRadarAppを構築し、is_terminated()になるかタイムアウトするまで動かす。
@@ -103,8 +106,11 @@ def run_app(
         radar_base_invert_direction=radar_base_invert_direction,
         radar_base_calibrate=radar_base_calibrate,
         radar_base_is_calibrated=radar_base_is_calibrated,
+        radar_base_run=radar_base_run,
+        radar_base_stop=radar_base_stop,
         scanner_get_distance=scanner_get_distance,
         calibration_timeout_sec=calibration_timeout_sec,
+        scanning_timeout_sec=scanning_timeout_sec,
     )
 
     def _report(state: State) -> None:

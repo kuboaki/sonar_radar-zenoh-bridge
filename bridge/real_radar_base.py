@@ -15,11 +15,16 @@ calibrate()を1回呼んだら、is_calibrated()を毎tickポーリングする�
 段階を進める設計にした。SonarRadarApp.CALIBRATING の
 「entryでcalibrate()を1回、以後is_calibrated()を毎tickポーリング」
 という構造にちょうど合う。
+
+run()/stop()/invert_direction()による継続旋回は、sonar_radar.py の
+_tick_scanning() と同じ設計(PWM一定駆動、マーカー検出時に符号反転のみ、
+都度停止しない)。run()は冪等(既に回転中なら何もしない)。
 """
 
 from __future__ import annotations
 
 _TOLERANCE_DEG = 3  # sonar_radar.py の _drive_to と同じ許容誤差
+_SCAN_PWM = 0.1  # sonar_radar.py の SCAN_PWM と同じ値
 
 
 class RealRadarBase:
@@ -47,6 +52,8 @@ class RealRadarBase:
         self._hat.port_config(self._port, spikehat.DEVICE_MOTOR_L)
         self._stage: str | None = None  # None→未開始, "to_zero", "to_offset", "done"
         self.zero_pos = 0
+        self._pwm = _SCAN_PWM
+        self._running = False
         print(f"[real_radar_base] 実機のradar_base(motor, port={self._port})を初期化しました")
 
     def calibrate(self) -> None:
@@ -77,5 +84,19 @@ class RealRadarBase:
             return True
         return False
 
+    def run(self) -> None:
+        """継続旋回を開始する(冪等、既に回転中なら何もしない)。"""
+        if self._running:
+            return
+        self._running = True
+        self._hat.motor_pwm(self._port, self._pwm)
+
+    def stop(self) -> None:
+        """継続旋回を停止する。"""
+        self._running = False
+        self._hat.motor_stop(self._port)
+
     def invert_direction(self) -> None:
-        raise NotImplementedError("次のマイルストーン(MARKER_DETECTED以降)で実装")
+        """回転方向を反転する(PWM符号反転、止めずに切り替える)。"""
+        self._pwm = -self._pwm
+        self._hat.motor_pwm(self._port, self._pwm)

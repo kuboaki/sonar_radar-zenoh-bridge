@@ -26,9 +26,10 @@ CALIBRATION_FAILEDは、マシン間協調の失敗ではなく、ローカル�
 
 starter_is_pushed()/marker_detector_is_detected()/
 radar_base_invert_direction()/radar_base_calibrate()/
-radar_base_is_calibrated()/scanner_get_distance() は、実ハードウェア
-(libspikehat)がまだこの層に接続されていないため、コンストラクタで
-注入可能にしている(未指定時はfalse/no-op/0を返す安全なスタブ)。
+radar_base_is_calibrated()/radar_base_run()/radar_base_stop()/
+scanner_get_distance() は、実ハードウェア(libspikehat)の実装差し替えを
+呼び出し側スクリプトに委ねるため、コンストラクタで注入可能にしている
+(未指定時はfalse/no-op/0を返す安全なスタブ)。
 
 MARKER_DETECTED/WAIT_FOR_INVERT/stopの対称処理/SCAN_FAILEDは、
 start/WAIT_FOR_SCAN_STARTと同じ「leaderはローカル検知→publishのみ、
@@ -105,6 +106,8 @@ class SonarRadarApp:
         radar_base_invert_direction: Optional[Callable[[], None]] = None,
         radar_base_calibrate: Optional[Callable[[], None]] = None,
         radar_base_is_calibrated: Optional[Callable[[], bool]] = None,
+        radar_base_run: Optional[Callable[[], None]] = None,
+        radar_base_stop: Optional[Callable[[], None]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 20.0,
         scanning_timeout_sec: float = 6.3,
@@ -133,6 +136,8 @@ class SonarRadarApp:
         self._radar_base_invert_direction_impl = radar_base_invert_direction or (lambda: None)
         self._radar_base_calibrate_impl = radar_base_calibrate or (lambda: None)
         self._radar_base_is_calibrated_impl = radar_base_is_calibrated or (lambda: False)
+        self._radar_base_run_impl = radar_base_run or (lambda: None)
+        self._radar_base_stop_impl = radar_base_stop or (lambda: None)
         self._scanner_get_distance_impl = scanner_get_distance or (lambda: 0)
 
     @property
@@ -161,6 +166,12 @@ class SonarRadarApp:
 
     def radar_base_is_calibrated(self) -> bool:
         return bool(self._radar_base_is_calibrated_impl())
+
+    def radar_base_run(self) -> None:
+        self._radar_base_run_impl()
+
+    def radar_base_stop(self) -> None:
+        self._radar_base_stop_impl()
 
     def scanner_get_distance(self) -> int:
         return self._scanner_get_distance_impl()
@@ -334,6 +345,7 @@ class SonarRadarApp:
             self._broker.publish_start()  # entry
             self.timer_start(2.0)  # entry
         elif new_state is State.SCANNING:
+            self.radar_base_run()  # entry
             self.timer_start(self._scanning_timeout_sec)  # entry
         elif new_state is State.MARKER_DETECTED:
             self._broker.publish_detected()  # entry
@@ -347,6 +359,7 @@ class SonarRadarApp:
             print("[sonar_radar_app] entry: スキャン失敗を通知")
             self._broker.publish_stop()  # entry
         elif new_state is State.TERMINATED:
+            self.radar_base_stop()  # entry
             self._broker.close()  # entry
             spikehat_timer_destroy(self._timer)  # entry
             print("[sonar_radar_app] entry: 終了処理")

@@ -42,6 +42,22 @@ class RadarHardware(abc.ABC):
         """radar_baseのキャリブレーションが完了したか。"""
 
     @abc.abstractmethod
+    def radar_base_run(self) -> None:
+        """radar_baseの継続旋回を開始する(冪等、既に回転中なら何もしない)。"""
+
+    @abc.abstractmethod
+    def radar_base_stop(self) -> None:
+        """radar_baseの継続旋回を停止する。"""
+
+    @abc.abstractmethod
+    def radar_base_invert_direction(self) -> None:
+        """radar_baseの回転方向を反転する(止めずに切り替える)。"""
+
+    @abc.abstractmethod
+    def marker_detector_is_detected(self) -> bool:
+        """marker_detector(色センサー)がマーカーを新たに検出したか(立ち上がりエッジ)。"""
+
+    @abc.abstractmethod
     def starter_is_pushed(self) -> bool:
         """starter(フォースセンサー等)が押されているか。starter未使用ならFalse。"""
 
@@ -54,10 +70,13 @@ class RealHardware(RadarHardware):
     """実機のハードウェアアクセス(libspikehat経由)。
 
     Build HATのファームウェアロードはinitialize()内で行う(SonarRadarAppの
-    INITのentry、broker.open()より後)。RealRadarBase/RealStarterは
-    Build HATへの同じシリアル接続(hat)を共有する必要があるため、
-    real_hat.create_real_hat()で1つだけ構築して両方に渡す
+    INITのentry、broker.open()より後)。RealRadarBase/RealStarter/
+    RealMarkerDetectorは、Build HATへの同じシリアル接続(hat)を共有する
+    必要があるため、real_hat.create_real_hat()で1つだけ構築して渡す
     (real_hat.pyのモジュールdocstring参照)。
+
+    marker_detectorはradar_baseと同じ物理ドームに載っているため、
+    use_radar_baseフラグと連動させる(個別のフラグは設けない)。
 
     radar_base/starterを使わない場合(コンストラクタでFalse指定)は、
     従来のスタブと同じ既定値(radar_base_is_calibrated()は即True、
@@ -70,6 +89,7 @@ class RealHardware(RadarHardware):
         self._hat = None
         self._radar_base = None
         self._starter = None
+        self._marker_detector = None
 
     def initialize(self) -> None:
         if self._use_radar_base or self._use_starter:
@@ -78,8 +98,10 @@ class RealHardware(RadarHardware):
             self._hat = create_real_hat()
         if self._use_radar_base:
             from real_radar_base import RealRadarBase
+            from real_marker_detector import RealMarkerDetector
 
             self._radar_base = RealRadarBase(self._hat)
+            self._marker_detector = RealMarkerDetector(self._hat)
         if self._use_starter:
             from real_starter import RealStarter
 
@@ -93,6 +115,23 @@ class RealHardware(RadarHardware):
         if self._radar_base is None:
             return True  # 既定スタブ(radar_base未使用時は即完了扱い)
         return self._radar_base.is_calibrated()
+
+    def radar_base_run(self) -> None:
+        if self._radar_base is not None:
+            self._radar_base.run()
+
+    def radar_base_stop(self) -> None:
+        if self._radar_base is not None:
+            self._radar_base.stop()
+
+    def radar_base_invert_direction(self) -> None:
+        if self._radar_base is not None:
+            self._radar_base.invert_direction()
+
+    def marker_detector_is_detected(self) -> bool:
+        if self._marker_detector is None:
+            return False
+        return self._marker_detector.is_detected()
 
     def starter_is_pushed(self) -> bool:
         if self._starter is None:
@@ -110,9 +149,11 @@ class HakoHardware(RadarHardware):
     hako_hat(HakoSpikeHat)自体はhakopyのasset登録に必要なため、
     呼び出し側(run_hako.py)がinitialize()より前に構築して渡す
     (この構築だけはSonarRadarAppのINITタイミングに合わせられない、
-    hakopyフレームワーク側の制約)。HakoRadarBase/HakoStarterの構築は
-    軽量・即時のため、実機のような遅延の必要は無いが、対称性のため
-    initialize()内で行う。
+    hakopyフレームワーク側の制約)。HakoRadarBase/HakoStarter/
+    HakoMarkerDetectorの構築は軽量・即時のため、実機のような遅延の
+    必要は無いが、対称性のためinitialize()内で行う。marker_detectorは
+    radar_baseと同じく常に構築する(実機のuse_radar_baseフラグに相当する
+    ものは無く、シムのradar_baseは既定で常に有効なため)。
     """
 
     def __init__(self, hako_hat, use_starter: bool) -> None:
@@ -120,11 +161,14 @@ class HakoHardware(RadarHardware):
         self._use_starter = use_starter
         self._radar_base = None
         self._starter = None
+        self._marker_detector = None
 
     def initialize(self) -> None:
         from hako_radar_base import HakoRadarBase
+        from hako_marker_detector import HakoMarkerDetector
 
         self._radar_base = HakoRadarBase(self._hako_hat)
+        self._marker_detector = HakoMarkerDetector(self._hako_hat)
         if self._use_starter:
             from hako_starter import HakoStarter
 
@@ -135,6 +179,18 @@ class HakoHardware(RadarHardware):
 
     def radar_base_is_calibrated(self) -> bool:
         return self._radar_base.is_calibrated()
+
+    def radar_base_run(self) -> None:
+        self._radar_base.run()
+
+    def radar_base_stop(self) -> None:
+        self._radar_base.stop()
+
+    def radar_base_invert_direction(self) -> None:
+        self._radar_base.invert_direction()
+
+    def marker_detector_is_detected(self) -> bool:
+        return self._marker_detector.is_detected()
 
     def starter_is_pushed(self) -> bool:
         if self._starter is None:

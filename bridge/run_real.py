@@ -77,6 +77,12 @@ def main() -> int:
         "そのものは含まない。broker.open()はhardware_initialize()より前にINITの"
         "entryで行われるため、初期化中もstart/stop/detected等の受信は取りこぼさない)",
     )
+    parser.add_argument(
+        "--scanning-timeout", type=float, default=6.3,
+        help="SCANNINGのタイムアウト秒数(既定6.3秒)。ドームが旋回しすぎてセンサー"
+        "ケーブルを巻き込む前に止めるための早期カットオフ(実機実測+マージン、"
+        "docs/zenoh_state_machine_design.md参照)",
+    )
     args = parser.parse_args()
 
     # ハードウェア初期化(特にBuild HATのファームウェアロード、数十秒かかる
@@ -103,11 +109,16 @@ def main() -> int:
             tick_interval_sec=_TICK_INTERVAL_SEC,
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
+            scanning_timeout_sec=args.scanning_timeout,
             hardware_initialize=hardware.initialize,
             starter_is_pushed=starter_is_pushed,
+            marker_detector_is_detected=hardware.marker_detector_is_detected,
             scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
             radar_base_calibrate=hardware.radar_base_calibrate,
             radar_base_is_calibrated=hardware.radar_base_is_calibrated,
+            radar_base_run=hardware.radar_base_run,
+            radar_base_stop=hardware.radar_base_stop,
+            radar_base_invert_direction=hardware.radar_base_invert_direction,
         )
     finally:
         hardware.close()
