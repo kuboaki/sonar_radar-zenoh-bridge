@@ -340,3 +340,35 @@ start/`WAIT_FOR_SCAN_START`で確立済みの「leaderはローカル検知→pu
 
 - `pdu_ros_bridge::sonar_radar_ros_bridge`(ブリッジ/監視役、Raspberry Pi 5想定)の設計・実装。
 - `scanning_timeout_sec`の新しい既定値(実機8秒/シム12秒)も、あくまで今回の限られた実測に基づく暫定値。実機での連続運用・より多くのサンプルを重ねて適切な値に見直す。
+
+## マイルストーン6: pdu_ros_bridgeの設計に着手、is_leader/is_starterの分離(進行中)
+
+### Raspberry Pi 5の接続とhakoniwa-pdu-ros状況の把握
+
+`pdu_ros_bridge::sonar_radar_ros_bridge`の設計に着手するにあたり、まずRaspberry Pi 5(`192.168.11.4`、ホスト名`ubuntu-desktop`)を実機・Macと同じネットワークへ接続し、状況を確認した。`hakoniwa-core-pro`/`hakoniwa-pdu-endpoint`/`hakoniwa-pdu-ros`は以前のセッション(7/21付のビルドログ多数)で既に導入・ビルド済みだったが、`hakoniwa-pdu-ros`配下に残っていた設定は同梱の汎用サンプル(Drone/pos・cmd、Zenoh接続先も自宅ネットワークの古いIP`192.168.1.92`のまま)のみで、sonar_radar向けの設定は無かった。`sonar_radar-zenoh-bridge`をクローンし、`config/raspi4b/`と同形の`config/raspi5/`(Zenoh接続先はMacの`192.168.11.2`)を新設した。
+
+### 設計方針の議論: 3者(実機・シム・pdu_ros_bridge)の役割分担
+
+ユーザーの要望は「スキャンデータの収集」と「実機・SIMへのstart/stopをROS側から注入」。検討の結果、`consume_start_received()`/`consume_stop_received()`には元々`is_leader`のガードが無いことが分かり(既存コードのまま、leader/followerどちらでも受信で拾える)、**ROSからのstart/stop注入は状態機械側の変更無しに、broker経由でPDUをpublishするだけで実現できる**と判明した。
+
+ただし、この過程で「`is_leader`がマーカー検出の権限とローカルstarterの権限を両方兼ねている」という設計上の結合に気づいた。ユーザーから「start/stopする指示を出すのと、leaderかfollowerかどうかを分けて考える必要がある」「leaderとfollowerは、どちらもレーダーであるという設計を維持する必要がある(実機とSIMだけでも動けるように)」との指摘を受け、以下の役割分担で合意した。
+
+- **starterになれる= start/stopを注入できる**: 実機・シム・broker経由の外部(`pdu_ros_bridge`等)のいずれからも注入可能。
+- **start/stopの注入を受け取るのは常に`sonar_radar`クラス(実機かシム)**。`pdu_ros_bridge`自身は`sonar_radar`のインスタンスではないため、受信側にはならない。
+
+### 実装したもの
+
+- クラス図: `sonar_radar`クラスに`is_starter`属性(型`double`ではなく`int`、`is_leader`と同型)を追加。
+- 状態機械図: `starter_is_pushed()`のガードを`[is_leader == true]`から`[is_starter == true]`に変更(`WAIT_FOR_START_PRESS`→`WAIT_FOR_START_RELEASE`、`SCANNING`→`WAIT_FOR_STOP_PRESS`の2遷移)。マーカー検出側の`[is_leader == true]`はそのまま。
+- `sonar_radar_app.py`: コンストラクタに`is_starter: Optional[bool] = None`を追加(未指定時は`is_leader`と同値、既存呼び出し元との後方互換)。`_tick_wait_for_start_press()`/`_tick_scanning()`の`starter_is_pushed()`ガードを`is_leader`から`is_starter`に変更。
+- `app_runner.py`: `run_app()`に`is_starter`引数を追加、`SonarRadarApp`へ貫通。`run_real.py`/`run_hako.py`へのCLIフラグ追加は見送り(既存呼び出しは全て`is_starter`未指定=`is_leader`と同値のまま)。
+
+### 確認した内容
+
+1プロセス自己ループバックで、既存の全経路(`is_starter`未指定→`is_leader`にフォールバック)が壊れていないことを確認済み。
+
+### 次にやること
+
+- `pdu_ros_bridge::sonar_radar_ros_bridge`のクラス図・状態機械図の設計(スキャンデータのROS中継、ROSからのstart/stop注入)。
+- `broker.py`にscan購読機能を追加(現状publish専用)。
+- `run_real.py`/`run_hako.py`/`demo_*.bash`の非対称パターン(starterだがleaderではない、等)整理は別途(備忘メモ参照)。

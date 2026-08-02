@@ -32,16 +32,24 @@ scanner_get_distance() は、実ハードウェア(libspikehat)の実装差し�
 (未指定時はfalse/no-op/0を返す安全なスタブ)。
 
 MARKER_DETECTED/WAIT_FOR_INVERT/stopの対称処理/SCAN_FAILEDは、
-start/WAIT_FOR_SCAN_STARTと同じ「leaderはローカル検知→publishのみ、
-実アクション(方向反転・終了)は自分のpublishのループバック受信で行う、
-followerは受信のみで直接遷移する」パターンをそのまま踏襲する。
+start/WAIT_FOR_SCAN_STARTと同じ「ローカル検知→publishのみ、実アクション
+(方向反転・終了)は自分のpublishのループバック受信で行う、受信のみの
+側は直接遷移する」パターンをそのまま踏襲する。
+
+is_leader(マーカー検出・方向反転の権限)とis_starter(ローカルの
+starter_is_pushed()判定・start/stop発行の権限)は独立した属性。
+is_starter未指定時はis_leaderと同値になる(既存呼び出し元との後方互換)。
+start/stopはconsume_start_received()/consume_stop_received()にis_leader/
+is_starterのガードが無いため、実機・シム以外(broker経由の外部)からの
+注入も特別な対応無しで受け取れる(is_starterはsonar_radarクラス内だけの
+属性で、外部の注入者はこの属性を持たない)。
 
 - SCANNING --[marker_detector_is_detected()][is_leader==true]--> MARKER_DETECTED
   (entryでdetectedをpublish、publish_confirm_timeout_sec付き)
   --[detectedを受信した]--> WAIT_FOR_INVERT(entryでradar_base_invert_direction()、
   無条件でSCANNINGへ戻る)。followerはSCANNINGから直接
   --[detectedを受信した]--> WAIT_FOR_INVERTへ進む(MARKER_DETECTEDを経由しない)。
-- SCANNING --[starter_is_pushed()][is_leader==true]--> WAIT_FOR_STOP_PRESS
+- SCANNING --[starter_is_pushed()][is_starter==true]--> WAIT_FOR_STOP_PRESS
   --[!starter_is_pushed()]--> WAIT_FOR_STOP_RELEASE(entryでstopをpublish、
   publish_confirm_timeout_sec付き)--[stopを受信した]--> TERMINATED。followerは
   SCANNINGから直接--[stopを受信した]--> TERMINATEDへ進む。
@@ -108,6 +116,7 @@ class SonarRadarApp:
         broker: Broker,
         broker_config_path: str,
         is_leader: bool,
+        is_starter: Optional[bool] = None,
         hardware_initialize: Optional[Callable[[], None]] = None,
         starter_is_pushed: Optional[Callable[[], bool]] = None,
         marker_detector_is_detected: Optional[Callable[[], bool]] = None,
@@ -128,6 +137,10 @@ class SonarRadarApp:
         self._broker = broker
         self._broker_config_path = broker_config_path
         self.is_leader = is_leader
+        # is_starter未指定時はis_leaderと同値にする(既存呼び出し元との後方
+        # 互換。is_leader=マーカー検出/方向反転の権限、is_starter=ローカル
+        # starter_is_pushed()の判定・start/stop発行の権限で、本来は独立)。
+        self.is_starter = is_leader if is_starter is None else is_starter
         # timerはこのクラスのコンポジション(生成・破棄ともこのクラスが担う)。
         # 生成はINIT、破棄はTERMINATEDのentryで行う(_tick_init/_transition_to参照)。
         self._timer = None
@@ -264,7 +277,7 @@ class SonarRadarApp:
         self._transition_to(State.TERMINATED)
 
     def _tick_wait_for_start_press(self) -> None:
-        if self.is_leader and self.starter_is_pushed():
+        if self.is_starter and self.starter_is_pushed():
             self._transition_to(State.WAIT_FOR_START_RELEASE)
             return
         if self._broker.consume_start_received():
@@ -287,12 +300,12 @@ class SonarRadarApp:
         # do: scanner_get_distance() / radar/scanner/scanをpublish
         distance_mm = self.scanner_get_distance()
         self._broker.publish_scan(angle=0, distance_mm=distance_mm)
-        # leaderのローカル検知(publishのみ、状態はここではまだ進めない場合
-        # と、直接遷移する場合がある。starter/marker_detectorのどちらも
-        # is_leaderガード付きのローカル検知を先に見る(自分のpublishの
-        # ループバックがこの時点で届いているはずはないため、両者は
-        # 同一tickで競合しない)。
-        if self.is_leader and self.starter_is_pushed():
+        # ローカル検知(publishのみ、状態はここではまだ進めない場合と、
+        # 直接遷移する場合がある)。starterはis_starter、marker_detectorは
+        # is_leaderとガードが異なる(両者は独立した権限のため)。自分の
+        # publishのループバックがこの時点で届いているはずはないため、
+        # 両者は同一tickで競合しない。
+        if self.is_starter and self.starter_is_pushed():
             self.timer_stop()  # exit
             self._transition_to(State.WAIT_FOR_STOP_PRESS)
             return
