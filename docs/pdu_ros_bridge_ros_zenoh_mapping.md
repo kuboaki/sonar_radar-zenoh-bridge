@@ -14,7 +14,7 @@
 
 | 現行PDU | 現行の型 | 新しい型 | 対応 |
 |---|---|---|---|
-| `start`/`stop`/`detected` | `raw/Trigger`(origin 1byte) | `std_msgs/Empty` | フィールドなし、純粋なトリガー。originはROS側では扱わない(`scan`も同様にorigin無し)。 |
+| `start`/`stop`/`detected` | `raw/Trigger`(origin 1byte) | `std_msgs/Bool` | `data: bool`。常に`true`を送る単純なトリガーとして使う(`data`は将来の用途のために予約したパラメータで、現状は値そのものに意味を持たせない)。originはROS側では扱わない(`scan`も同様にorigin無し)。 |
 | `state` | `raw/State`(`"{origin}:{name}"` 32byte固定UTF-8) | `std_msgs/String` | `data: str`に既存の`"{origin}:{state_name}"`文字列をそのまま格納。 |
 | `scan`(個別、Zenoh内部専用) | `raw/RadarScan`(angle int32, dome_angle float64(未使用), distance_mm int32、16byte) | 変更なし(ROSへは直接渡らない) | `sonar_radar_ros_bridge`が受信・蓄積するだけで、ROS側へは`scan_batch`を経由してのみ渡る。 |
 | `scan_batch`(新設) | — | `sensor_msgs/PointCloud` | 下記参照。 |
@@ -44,6 +44,7 @@
 ## 影響範囲
 
 - `pdu/pdutypes.json`: `start`/`stop`/`detected`/`state`の`type`を標準型へ変更、`scan_batch`チャンネルを新設。
-- `bridge/broker.py`: `publish_start`/`publish_stop`/`publish_detected`/`publish_state`/`consume_*_received`の実装を標準型のエンコード/デコードに置き換え。`publish_scan_batch`/`consume_scan_received`を新設。標準型のPDU⇔バイト列変換には`hakoniwa_pdu`パッケージの`pdu_conv_*`/`pdu_pytype_*`(Point Cloud/Empty/String等)を利用する想定(要調査: `bridge/`環境への追加インストールが必要か)。
+- `bridge/broker.py`: `publish_start`/`publish_stop`/`publish_detected`/`publish_state`/`consume_*_received`の実装を標準型のエンコード/デコードに置き換え。`publish_scan_batch`/`consume_scan_received`を新設。標準型のPDU⇔バイト列変換には`hakoniwa_pdu`パッケージ(pip名`hakoniwa-pdu`、v1.6.2)の`pdu_conv_*`/`pdu_pytype_*`(PointCloud/Bool/String等)を利用する。`hakoniwa_pdu_ros`(Pi5)の`PduEndpointManager`も内部で`hakoniwa_pdu_endpoint.c_endpoint.Endpoint`を使っており、broker.pyの通信層と完全に同一のため、バイト列レベルでの相互運用性は問題ない(2026-08-03確認)。`hakoniwa_pdu`はMacの`bridge/`実行環境(`~/Projects/sonar_radar/.venv`)へ導入済み。Pi4・Pi5(Pi5は`hakoniwa-pdu-ros`導入時に既に入っている)にも同様に導入が必要。
+  - **既知の不具合**: `hakoniwa_pdu==1.6.2`の`pdu_pytype_Empty.py`はコード生成のバグで`__init__`の中身が空になっており、importの時点で`IndentationError`になる(フィールドを持たないメッセージ型の自動生成コードに共通する不具合の可能性がある)。このため`start`/`stop`/`detected`は`std_msgs/Empty`ではなく`std_msgs/Bool`を採用した(上記対応表参照)。不具合自体は影響を受けないため今回のPDU設計に支障はないが、上流プロジェクトへの報告を別途検討する。
 - `bridge/sonar_radar_app.py`: `_tick_scanning()`で実角度を`publish_scan()`へ渡すよう配線変更。
 - Raspberry Pi 5側: `hakoniwa_pdu_ros`用のbinding設定(`scan_batch`/`state`: `pdu_to_ros`、ROS側start/stopトピック: `ros_to_pdu`)を新設。
