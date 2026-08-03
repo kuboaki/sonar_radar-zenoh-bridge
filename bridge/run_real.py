@@ -57,6 +57,13 @@ def main() -> int:
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
     parser.add_argument(
+        "--starter", action=argparse.BooleanOptionalAction, default=None,
+        help="is_starterを明示的に指定する(--starter/--no-starter)。未指定時は"
+        "--leaderと同値(is_leader/is_starterが独立する前の後方互換動作)。ROS側"
+        "からstart/stopを注入するデモでは、実機・SIMの物理/擬似starterと競合"
+        "しないよう両方とも--no-starterにするとよい",
+    )
+    parser.add_argument(
         "--real-radar-base", action="store_true",
         help="radar_baseを擬似スタブ(即完了)ではなく実機のモーター(libspikehat)で動かす",
     )
@@ -97,9 +104,11 @@ def main() -> int:
     # 内部で扱う(hardware.py参照)。
     hardware = RealHardware(use_radar_base=args.real_radar_base, use_starter=args.real_starter)
 
+    effective_starter = args.leader if args.starter is None else args.starter
+
     if args.real_starter:
         starter_is_pushed = hardware.starter_is_pushed
-    elif args.leader:
+    elif effective_starter:
         fake_starter = _FakeStarter(press_after_sec=args.press_after, hold_sec=0.5)
         starter_is_pushed = fake_starter.is_pushed
     else:
@@ -111,6 +120,7 @@ def main() -> int:
             config_path=args.config,
             origin=args.origin,
             is_leader=args.leader,
+            is_starter=args.starter,
             sleep=time.sleep,
             tick_interval_sec=_TICK_INTERVAL_SEC,
             overall_timeout_sec=args.timeout,

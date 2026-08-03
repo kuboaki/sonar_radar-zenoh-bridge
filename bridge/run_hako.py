@@ -78,6 +78,13 @@ def main() -> None:
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
     parser.add_argument(
+        "--starter", action=argparse.BooleanOptionalAction, default=None,
+        help="is_starterを明示的に指定する(--starter/--no-starter)。未指定時は"
+        "--leaderと同値(is_leader/is_starterが独立する前の後方互換動作)。ROS側"
+        "からstart/stopを注入するデモでは、実機・SIMの物理/擬似starterと競合"
+        "しないよう両方とも--no-starterにするとよい",
+    )
+    parser.add_argument(
         "--hako-starter", action="store_true",
         help="starterをスタブではなくplantのforce_sensor PDU(ビューアのSpaceキー操作を含む)で読む",
     )
@@ -121,6 +128,7 @@ def main() -> None:
             config_path=args.config,
             origin=args.origin,
             is_leader=args.leader,
+            is_starter=args.starter,
             sleep=hako_hat.sleep,
             tick_interval_sec=_TICK_INTERVAL_SEC,
             overall_timeout_sec=args.timeout,
