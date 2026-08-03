@@ -55,6 +55,10 @@ class RadarHardware(abc.ABC):
 
     @abc.abstractmethod
     def radar_base_get_position(self) -> int:
+        """radar_baseの現在のモーター角度(度、生値)を返す。"""
+
+    @abc.abstractmethod
+    def radar_base_get_dome_angle(self) -> float:
         """radar_baseの現在のドーム角度(度)を返す。"""
 
     @abc.abstractmethod
@@ -137,6 +141,11 @@ class RealHardware(RadarHardware):
             return 0
         return self._radar_base.get_position()
 
+    def radar_base_get_dome_angle(self) -> float:
+        if self._radar_base is None:
+            return 0.0
+        return self._radar_base.get_dome_angle()
+
     def marker_detector_is_detected(self) -> bool:
         if self._marker_detector is None:
             return False
@@ -200,6 +209,9 @@ class HakoHardware(RadarHardware):
 
     def radar_base_get_position(self) -> int:
         return self._radar_base.get_position()
+
+    def radar_base_get_dome_angle(self) -> float:
+        return self._radar_base.get_dome_angle()
 
     def marker_detector_is_detected(self) -> bool:
         return self._marker_detector.is_detected()

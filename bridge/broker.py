@@ -25,7 +25,7 @@ import threading
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _ROBOT = "Radar"
-_SCAN_STRUCT = struct.Struct("<idi")  # angle(int32), dome_angle(float64), distance_mm(int32)
+_SCAN_STRUCT = struct.Struct("<Bidi")  # origin(uint8), angle(int32), dome_angle(float64), distance_mm(int32)
 _STATE_PDU_SIZE = 32  # pdu/pdutypes.json の state チャンネル(channel_id=6)と合わせる
 
 
@@ -62,8 +62,8 @@ class Broker:
     def publish_detected(self) -> None:
         self._publish("detected")
 
-    def publish_scan(self, angle: int, distance_mm: int) -> None:
-        payload = _SCAN_STRUCT.pack(angle, float("nan"), distance_mm)
+    def publish_scan(self, angle: int, dome_angle: float, distance_mm: int) -> None:
+        payload = _SCAN_STRUCT.pack(self._origin, angle, dome_angle, distance_mm)
         self._endpoint.send_by_name(PduKey(robot=_ROBOT, pdu="scan"), payload)
 
     def publish_state(self, state_name: str) -> None:

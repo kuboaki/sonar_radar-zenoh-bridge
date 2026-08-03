@@ -127,6 +127,7 @@ def main() -> int:
             radar_base_stop=hardware.radar_base_stop,
             radar_base_invert_direction=hardware.radar_base_invert_direction,
             radar_base_get_position=hardware.radar_base_get_position,
+            radar_base_get_dome_angle=hardware.radar_base_get_dome_angle,
         )
     finally:
         hardware.close()

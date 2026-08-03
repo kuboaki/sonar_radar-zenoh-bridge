@@ -2,6 +2,6 @@
   { "channel_id": 2, "pdu_size": 1,  "name": "start",      "type": "raw/Trigger" },
   { "channel_id": 3, "pdu_size": 1,  "name": "stop",       "type": "raw/Trigger" },
   { "channel_id": 4, "pdu_size": 1,  "name": "detected",   "type": "raw/Trigger" },
-  { "channel_id": 5, "pdu_size": 16, "name": "scan",       "type": "raw/RadarScan" },
+  { "channel_id": 5, "pdu_size": 17, "name": "scan",       "type": "raw/RadarScan" },
   { "channel_id": 6, "pdu_size": 32, "name": "state",      "type": "raw/State" }
 ]

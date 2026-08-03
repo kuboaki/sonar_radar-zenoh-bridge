@@ -27,7 +27,7 @@ CALIBRATION_FAILEDは、マシン間協調の失敗ではなく、ローカル�
 starter_is_pushed()/marker_detector_is_detected()/
 radar_base_invert_direction()/radar_base_calibrate()/
 radar_base_is_calibrated()/radar_base_run()/radar_base_stop()/
-radar_base_get_position()/scanner_get_distance() は、実ハードウェア(libspikehat)の実装差し替えを
+radar_base_get_position()/radar_base_get_dome_angle()/scanner_get_distance() は、実ハードウェア(libspikehat)の実装差し替えを
 呼び出し側スクリプトに委ねるため、コンストラクタで注入可能にしている
 (未指定時はfalse/no-op/0を返す安全なスタブ)。
 
@@ -126,6 +126,7 @@ class SonarRadarApp:
         radar_base_run: Optional[Callable[[], None]] = None,
         radar_base_stop: Optional[Callable[[], None]] = None,
         radar_base_get_position: Optional[Callable[[], int]] = None,
+        radar_base_get_dome_angle: Optional[Callable[[], float]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 20.0,
         scanning_timeout_sec: float = 8.0,
@@ -163,6 +164,7 @@ class SonarRadarApp:
         self._radar_base_run_impl = radar_base_run or (lambda: None)
         self._radar_base_stop_impl = radar_base_stop or (lambda: None)
         self._radar_base_get_position_impl = radar_base_get_position or (lambda: 0)
+        self._radar_base_get_dome_angle_impl = radar_base_get_dome_angle or (lambda: 0.0)
         self._scanner_get_distance_impl = scanner_get_distance or (lambda: 0)
 
     @property
@@ -200,6 +202,9 @@ class SonarRadarApp:
 
     def radar_base_get_position(self) -> int:
         return self._radar_base_get_position_impl()
+
+    def radar_base_get_dome_angle(self) -> float:
+        return self._radar_base_get_dome_angle_impl()
 
     def scanner_get_distance(self) -> int:
         return self._scanner_get_distance_impl()
@@ -302,10 +307,11 @@ class SonarRadarApp:
             self._transition_to(State.SCAN_FAILED)
 
     def _tick_scanning(self) -> None:
-        # do: radar_base_get_position() / scanner_get_distance() / radar/scanner/scanをpublish
+        # do: radar_base_get_position() / radar_base_get_dome_angle() / scanner_get_distance() / radar/scanner/scanをpublish
         angle = self.radar_base_get_position()
+        dome_angle = self.radar_base_get_dome_angle()
         distance_mm = self.scanner_get_distance()
-        self._broker.publish_scan(angle=angle, distance_mm=distance_mm)
+        self._broker.publish_scan(angle=angle, dome_angle=dome_angle, distance_mm=distance_mm)
         # ローカル検知(publishのみ、状態はここではまだ進めない場合と、
         # 直接遷移する場合がある)。starterはis_starter、marker_detectorは
         # is_leaderとガードが異なる(両者は独立した権限のため)。自分の

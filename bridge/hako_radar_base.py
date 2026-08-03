@@ -94,6 +94,10 @@ class HakoRadarBase:
         self._hat.motor_pwm(self._port, self._scan_pwm)
 
     def get_position(self) -> int:
-        """現在のドーム角度(度、zero_pos基準)を返す。"""
+        """現在のモーター角度(度、zero_pos基準の生値)を返す。"""
         current = self._hat.motor_get_position(self._port)
-        return round((current - self.zero_pos) / self._gear_ratio)
+        return round(current - self.zero_pos)
+
+    def get_dome_angle(self) -> float:
+        """現在のドーム角度(度)を返す。sonar_radar.pyのmotor_to_dome()と同じ換算(符号反転あり)。"""
+        return -self.get_position() / self._gear_ratio

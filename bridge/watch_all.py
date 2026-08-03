@@ -33,7 +33,7 @@ from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CONFIG = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.json")
 _ROBOT = "Radar"
-_SCAN_STRUCT = struct.Struct("<idi")  # angle(int32), dome_angle(float64), distance_mm(int32)
+_SCAN_STRUCT = struct.Struct("<Bidi")  # origin(uint8), angle(int32), dome_angle(float64), distance_mm(int32)
 
 _TRIGGER_CHANNELS = ["start", "stop", "detected"]
 
@@ -69,12 +69,12 @@ def main() -> int:
 
     def _on_scan(_key, payload: bytes) -> None:
         try:
-            angle, dome_angle, distance_mm = _SCAN_STRUCT.unpack(payload)
+            origin, angle, dome_angle, distance_mm = _SCAN_STRUCT.unpack(payload)
         except struct.error:
             print(f"[{_now()}]         scan (unpack失敗)", flush=True)
             return
         print(
-            f"[{_now()}]         scan angle={angle} dome_angle={dome_angle} distance_mm={distance_mm}",
+            f"[{_now()}] origin={origin:<3} scan angle={angle} dome_angle={dome_angle} distance_mm={distance_mm}",
             flush=True,
         )
 
