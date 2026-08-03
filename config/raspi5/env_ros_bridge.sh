@@ -19,4 +19,20 @@ source ~/Projects/ros2_ws/install/setup.bash
 
 export HAKONIWA_PDU_ENDPOINT_PYTHON_PATH="$HOME/.local/lib/hakoniwa-pdu-endpoint/python"
 export PYTHONPATH="$HOME/Projects/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
-export LD_LIBRARY_PATH="$HOME/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint:/usr/local/hakoniwa/lib:${LD_LIBRARY_PATH:-}"
+
+# 【2026-08-04の教訓】~/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint/
+# にはlibhakoniwa_pdu_endpoint.soしか置かれておらず、その依存先libzenohc.soは
+# 同梱されていない(install.bash側の既知の欠落)。そのため上のsource文で
+# /opt/ros/jazzy/setup.bashを読み込むと、そちらが持つ別ビルドのzenoh-c
+# (/opt/ros/jazzy/opt/zenoh_cpp_vendor/lib/libzenohc.so、rmw_zenoh用に
+# 別途ビルドされた別バージョン)がLD_LIBRARY_PATH経由で拾われてしまい、
+# 当方のcomm_zenoh.cppをビルドした時のzenoh-cとABIが食い違う。この状態で
+# ZenohComm::send()を呼ぶ(=start/stop等をZenohへ転送する)と
+# "stack smashing detected"で毎回ではないが再現性高くクラッシュする実害が
+# あった(hakoniwa_pdu_rosブリッジ経由のROS start/stop注入テストで発見)。
+# 当方が実際にビルドしたlibzenohc.so
+# (~/Projects/hakoniwa-pdu-endpoint/build/_deps/zenohc-build/release/target/release)
+# を明示的に先頭へ入れ、ROS側の同名ライブラリより先に解決させることで回避する。
+# 根本対策としては、hakoniwa-pdu-endpoint側のinstall.bashがlibzenohc.soも
+# .localへ同梱するよう直すべき(未対応、上流への報告も未実施)。
+export LD_LIBRARY_PATH="$HOME/Projects/hakoniwa-pdu-endpoint/build/_deps/zenohc-build/release/target/release:$HOME/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint:/usr/local/hakoniwa/lib:${LD_LIBRARY_PATH:-}"
