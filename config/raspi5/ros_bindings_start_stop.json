@@ -1,0 +1,15 @@
+{
+  "endpoint_config": "endpoint_zenoh.json",
+  "bindings": [
+    {
+      "pdu_key": { "robot_name": "Radar", "pdu_name": "start" },
+      "topic": "/sonar_radar/start_cmd",
+      "direction": "ros_to_pdu"
+    },
+    {
+      "pdu_key": { "robot_name": "Radar", "pdu_name": "stop" },
+      "topic": "/sonar_radar/stop_cmd",
+      "direction": "ros_to_pdu"
+    }
+  ]
+}

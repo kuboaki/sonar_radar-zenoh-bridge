@@ -15,6 +15,14 @@ start/stop/detected のいずれも、自分のpublishが自分に
 calibrate/calibratedのマシン間協調は廃止したため、このクラスは
 扱わない(経緯はdocs/zenoh_state_machine_design.md
 「背景: キャリブレーション協調の廃止」参照)。
+
+start/stop/detected/state は、hakoniwa_pdu_ros(Pi5)の汎用PDU⇔ROS中継が
+変換できる標準メッセージ型(std_msgs/Bool, std_msgs/String)でエンコードする
+(docs/pdu_ros_bridge_ros_zenoh_mapping.md参照)。エンコードは
+hakoniwa_pduパッケージのpdu_conv_*/pdu_pytype_*を使い、独自struct.packでは
+手詰めしない(バイト列レベルでhakoniwa_pdu_rosと一致させるため)。
+scanは今のところROSへ直接渡らない内部専用チャンネルのため、従来通り
+struct.packの生バイト列のままにしている。
 """
 
 from __future__ import annotations
@@ -22,17 +30,31 @@ from __future__ import annotations
 import struct
 import threading
 
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_Bool import py_to_pdu_Bool
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_String import py_to_pdu_String
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_pytype_Bool import Bool
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_pytype_String import String
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _ROBOT = "Radar"
 _SCAN_STRUCT = struct.Struct("<Bidi")  # origin(uint8), angle(int32), dome_angle(float64), distance_mm(int32)
-_STATE_PDU_SIZE = 32  # pdu/pdutypes.json の state チャンネル(channel_id=6)と合わせる
+
+
+def _encode_bool(value: bool) -> bytes:
+    obj = Bool()
+    obj.data = value
+    return bytes(py_to_pdu_Bool(obj))
+
+
+def _encode_string(value: str) -> bytes:
+    obj = String()
+    obj.data = value
+    return bytes(py_to_pdu_String(obj))
 
 
 class Broker:
     def __init__(self, name: str, origin: int) -> None:
         self._origin = origin
-        self._origin_bytes = origin.to_bytes(1, "big")
         self._endpoint = Endpoint(name, "inout")
         self._lock = threading.Lock()
         self._start_received = False
@@ -69,7 +91,7 @@ class Broker:
     def publish_state(self, state_name: str) -> None:
         """状態遷移を外部から観測できるようにする(designed APIには無い、観測用の追加メソッド)。
 
-        pdu/pdutypes.json の state チャンネル(32バイト固定)へ、
+        pdu/pdutypes.json の state チャンネル(std_msgs/String)へ、
         "{origin}:{状態名}" をUTF-8でpublishする。全originが同じ1つの
         チャンネルを共有するため、どのマシン(origin)の遷移かを区別
         できるようにoriginを含めている。zenohdのREST/storage_manager
@@ -77,7 +99,7 @@ class Broker:
         bridge/watch_state.py で受信・表示できる。
         """
         text = f"{self._origin}:{state_name}"
-        payload = text.encode("utf-8")[:_STATE_PDU_SIZE].ljust(_STATE_PDU_SIZE, b"\x00")
+        payload = _encode_string(text)
         self._endpoint.send_by_name(PduKey(robot=_ROBOT, pdu="state"), payload)
 
     # --- consume系 (ポーリング、一度だけtrueを返し内部フラグをクリア) ---
@@ -100,7 +122,13 @@ class Broker:
     # --- 内部 ---
 
     def _publish(self, pdu_name: str) -> None:
-        self._endpoint.send_by_name(PduKey(robot=_ROBOT, pdu=pdu_name), self._origin_bytes)
+        """トリガー系(start/stop/detected)をstd_msgs/Boolでpublishする。
+
+        dataは常にtrue(単純なトリガー、将来用途のために予約したパラメータ)。
+        originはこのメッセージ型には含まれない(scanと同様に、これらの
+        チャンネルではoriginを扱わない設計)。
+        """
+        self._endpoint.send_by_name(PduKey(robot=_ROBOT, pdu=pdu_name), _encode_bool(True))
 
     def _subscribe(self, pdu_name: str, on_recv) -> None:
         def _cb(_key, payload: bytes) -> None:

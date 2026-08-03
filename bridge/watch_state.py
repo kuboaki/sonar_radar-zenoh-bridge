@@ -21,6 +21,7 @@ import sys
 import time
 
 from console_report import console_report
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_String import pdu_to_py_String
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +40,7 @@ def main() -> int:
     endpoint.post_start()
 
     def _on_recv(_key, payload: bytes) -> None:
-        text = payload.rstrip(b"\x00").decode("utf-8", errors="replace")
+        text = pdu_to_py_String(bytearray(payload)).data
         # broker.publish_state()は"{origin}:{状態名}"の形式でpublishする。
         # 全originが同じチャンネルを共有するため、originを表示して
         # どのマシンの遷移かを区別できるようにする。

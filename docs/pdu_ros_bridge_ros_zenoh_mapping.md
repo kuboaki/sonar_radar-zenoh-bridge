@@ -38,8 +38,8 @@
 
 上記の設計を成立させるには、以下の既存ギャップの解消が前提となる。
 
-1. **`scan`の`angle`が常に0固定**: (2026-08-03 解消済み) `radar_base`に`get_position()`(zero_pos基準のドーム角度、度)を追加し、`hardware.py`経由で`radar_base_get_position()`として`sonar_radar_app.py`の`_tick_scanning()`から呼び出すよう配線した。Astah側もSCANNINGのdoActivityに`radar_base_get_position()`を追記済み。1プロセス自己ループバックで動作確認済み。
-2. **既存の`start`/`stop`/`detected`/`state`のバイナリ実装の置き換え**: `bridge/broker.py`は`sonar_radar`・`sonar_radar_sim`・`pdu_ros_bridge`が共有するため、型を変更すると3者とも同時に実装を変更する必要がある(動作確認済みの既存チャンネルへの変更を伴う)。(未着手)
+1. **`scan`の`angle`が常に0固定**: (2026-08-03 解消済み) `radar_base`に`get_position()`(モーターの生角度)/`get_dome_angle()`(ギア比補正後のドーム角度、`-get_position()/gear_ratio`)を追加し、`hardware.py`経由で`sonar_radar_app.py`の`_tick_scanning()`から両方呼び出すよう配線した。あわせて`scan`にoriginが無く実機/SIM同時稼働時にデータを区別できなかった問題も修正した(`_SCAN_STRUCT`に`origin`を追加)。Astah側もSCANNINGのdoActivity・`radar_base`の操作・`broker.publish_scan()`の引数を更新済み。実機+SIMの組み合わせで`dome_angle = -angle/3`が全サンプルで一致することを確認済み。
+2. **既存の`start`/`stop`/`detected`/`state`のバイナリ実装の置き換え**: (2026-08-03 解消済み) `bridge/broker.py`の`publish_start`/`publish_stop`/`publish_detected`/`publish_state`/`_publish`を、`hakoniwa_pdu`パッケージの`pdu_conv_Bool`/`pdu_conv_String`を使うよう書き換えた。`start`/`stop`/`detected`は`std_msgs/Bool`(実測28byte、常に`data=true`)、`state`は`std_msgs/String`(実測152byte、`"{origin}:{state_name}"`)。`pdu/pdutypes.json`の`pdu_size`もこれに合わせて変更した(`start`/`stop`/`detected`: 1→28、`state`: 32→152)。`bridge/watch_all.py`/`watch_state.py`の表示側も追従済み。1プロセス自己ループバックで動作確認済み。**注記**: `hakoniwa_pdu`のエンコード形式は単純な値の詰め替えではなく、24byteのメタデータヘッダ+データ部という独自バイナリ形式(`binary_io.PduMetaData.PDU_META_DATA_SIZE=24`)。`pdu_size`はこの合計サイズに合わせる必要がある。
 
 ## 影響範囲
 
@@ -48,3 +48,28 @@
   - **既知の不具合**: `hakoniwa_pdu==1.6.2`の`pdu_pytype_Empty.py`はコード生成のバグで`__init__`の中身が空になっており、importの時点で`IndentationError`になる(フィールドを持たないメッセージ型の自動生成コードに共通する不具合の可能性がある)。このため`start`/`stop`/`detected`は`std_msgs/Empty`ではなく`std_msgs/Bool`を採用した(上記対応表参照)。不具合自体は影響を受けないため今回のPDU設計に支障はないが、上流プロジェクトへの報告を別途検討する。
 - `bridge/sonar_radar_app.py`: `_tick_scanning()`で実角度を`publish_scan()`へ渡すよう配線変更。
 - Raspberry Pi 5側: `hakoniwa_pdu_ros`用のbinding設定(`scan_batch`/`state`: `pdu_to_ros`、ROS側start/stopトピック: `ros_to_pdu`)を新設。
+
+## ROS側からのstart/stop注入(距離センサー配線・scan_batchより先行して実施)
+
+distance_mmの実センサー配線とscan_batchの実装は保留し、まず「ROS側からstart/stopをかけられる」ところまでを先に成立させる。
+
+1. `bridge/broker.py`のstart/stop標準型化(上記「前提となる未実装ギャップ」2番、解消済み)。
+2. `config/raspi5/ros_bindings_start_stop.json`(新設)。ROSトピック→`start`/`stop` PDUへの`ros_to_pdu`一方向binding。
+   ```json
+   {
+     "endpoint_config": "endpoint_zenoh.json",
+     "bindings": [
+       { "pdu_key": { "robot_name": "Radar", "pdu_name": "start" }, "topic": "/sonar_radar/start_cmd", "direction": "ros_to_pdu" },
+       { "pdu_key": { "robot_name": "Radar", "pdu_name": "stop" },  "topic": "/sonar_radar/stop_cmd",  "direction": "ros_to_pdu" }
+     ]
+   }
+   ```
+   Pi5での起動: `ros2 run hakoniwa_pdu_ros bridge --config config/raspi5/ros_bindings_start_stop.json`(`hakoniwa-pdu-ros`のsetup.pyで`bridge`エントリポイントとして登録されている)。
+3. **ROS側の「スターターもどき」**: 専用ノードはまだ作らず、`ros2 topic pub`での手動トリガーで動作確認する。
+   ```bash
+   ros2 topic pub --once /sonar_radar/start_cmd std_msgs/msg/Bool "{data: true}"
+   ros2 topic pub --once /sonar_radar/stop_cmd  std_msgs/msg/Bool "{data: true}"
+   ```
+   実機・SIM側は`is_starter=False`にしておく(物理スターターとROS注入が競合しないようにするため、運用上の推奨。ガード上は必須ではない、`consume_start_received()`/`consume_stop_received()`はis_starterに関わらず受信を受け付ける設計のため)。
+
+まだ実施していない: 上記2・3の実機(Pi5)での動作確認。

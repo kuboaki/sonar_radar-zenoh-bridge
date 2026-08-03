@@ -94,13 +94,13 @@ sonar_radar-zenoh-bridge/
                                  # 置き換わっていく
 ```
 
-`config/raspi5/`（`hakoniwa-pdu-ros` bridge 用設定）は未着手。
+`config/raspi5/`（`hakoniwa-pdu-ros` bridge 用設定）はネットワーク接続・基本設定まで完了(#14)。`pdu_ros_bridge::sonar_radar_ros_bridge`本体の実装は進行中、詳細は[`docs/pdu_ros_bridge_ros_zenoh_mapping.md`](docs/pdu_ros_bridge_ros_zenoh_mapping.md)を参照。
 
 ### PDU定義の実装メモ
 
-トリガー系（calibrate/calibrated/start/stop/detected）は受信そのものに意味があり、ペイロードの中身は使わないため、`hakoniwa-pdu-ros`のROS型システムには頼らず`hakoniwa-pdu-endpoint`の生バイトAPI（`send_by_name`/`subscribe_on_recv_callback_by_name`）を直接使う設計にした。`pdutypes.json`の`type`フィールドはC++側のパーサーが必須とするため空にはできないが、値自体はメタデータとしてのみ扱われ検証はされない（`raw/Trigger`, `raw/RadarScan`という独自表記を採用）。
+`start`/`stop`/`detected`/`state`は、`hakoniwa_pdu_ros`(Pi5)の汎用PDU⇔ROS中継が変換できるよう、`hakoniwa_pdu`パッケージ(pip名`hakoniwa-pdu`)の標準メッセージ型でエンコードしている(`start`/`stop`/`detected`は`std_msgs/Bool`、`state`は`std_msgs/String`)。当初は独自の生バイト形式(`raw/Trigger`等)だったが、標準型でなければ`hakoniwa_pdu_ros`が中継できないことが判明し、2026-08-03に置き換えた。詳細・経緯は[`docs/pdu_ros_bridge_ros_zenoh_mapping.md`](docs/pdu_ros_bridge_ros_zenoh_mapping.md)を参照。
 
-`scan`のペイロードは自前のバイナリ形式（`struct.pack("<idi", angle, dome_angle, distance_mm)`、16バイト固定）。`angle`/`distance_mm`が`None`のときは番兵値`-2147483648`、`dome_angle`が`None`のときは`NaN`を使う。
+`scan`(個別のスキャン点、Zenoh内部専用でROSへは直接渡らない)のペイロードは自前のバイナリ形式のまま(`struct.pack("<Bidi", origin, angle, dome_angle, distance_mm)`、17バイト固定)。`angle`はモーターの生角度、`dome_angle`はギア比補正後のドーム角度(`-angle/gear_ratio`)。
 
 ### ドライバスクリプトの受信方式について（重要な訂正）
 
@@ -300,7 +300,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 12. [x] 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`と同様の「実機・シムで差し替え可能な共通インターフェース」として`bridge/hardware.py`(`RadarHardware`/`RealHardware`/`HakoHardware`)を新設し、`run_real.py`/`run_hako.py`それぞれの個別配線をここに集約した。
 13. [x] `radar_base`の継続旋回(`run()`/`stop()`/`invert_direction()`)と`marker_detector`(`real_marker_detector.py`/`hako_marker_detector.py`)を実装。マイルストーン11の時点では状態機械のロジックのみでドームを物理的に回す配線が漏れていたことが実機確認で発覚し、追加実装した。実機単体・シム単体・実機+シム2台構成(leader/follower入れ替え含む)で、ドームが実際に旋回しマーカーで反転を繰り返すことを目視確認済み。あわせて、ブリッジ経由のオーバーヘッドを踏まえて`scanning_timeout_sec`の既定値を調整し(`--scanning-timeout`で実機/シムそれぞれ個別に上書き可能)、タイムアウト値をクラス属性として状態機械図から名前で参照する設計に統一した(`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`)。当初実機8秒/シム12秒と分けたが、followerのタイムアウトがleaderより短いとleaderがまだ正常範囲内でもfollowerが先に見切りをつけてしまう問題が判明し、両者とも8秒に統一した(2026-08-03)。詳細は[`docs/development_log.md`](docs/development_log.md)「マイルストーン5」「マイルストーン6」を参照。
 14. [x] Raspberry Pi 5(`192.168.11.4`、ホスト名`ubuntu-desktop`)を実機・Macと同じネットワークへ接続し、`sonar_radar-zenoh-bridge`をクローン。`config/raspi5/`(`config/raspi4b/`と同形、Zenoh接続先はこのMac`192.168.11.2`)を新設した。`hakoniwa-core-pro`/`hakoniwa-pdu-endpoint`/`hakoniwa-pdu-ros`は以前のセッションで導入・ビルド済みであることを確認済み(汎用サンプル設定のみ残っていたので、sonar_radar向けの設定に置き換えた)。
-15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化
+15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化。進行中: クラス図・状態機械図は設計済み(`docs/pdu_ros_bridge_ros_zenoh_mapping.md`参照)。`start`/`stop`/`detected`/`state`の標準メッセージ型化、`scan`のangle/dome_angle/origin配線、`config/raspi5/ros_bindings_start_stop.json`(ROS→start/stop注入用binding設定)まで完了(2026-08-03)。distance_mmの実センサー配線と`scan_batch`本体の実装、Pi5実機での動作確認はまだ。
 16. クラス図: `sonar_radar`クラスの構成(composition)に`marker_detector`/`scanner`が抜けている(`unit`パッケージには5クラスあるが、`sonar_radar`から実際にcompositionが貼られているのは`radar_base`/`radar_dome`/`starter`の3つのみ)。`pdu_ros_bridge`のクラス図作業時に気づいた既存の抜けで、別途直す。
 
 ## ステータス

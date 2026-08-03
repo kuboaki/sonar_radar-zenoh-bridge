@@ -7,10 +7,12 @@ watch_state.py はアプリが自己申告する状態(state)チャンネルだ�
 アプリの自己申告に頼らず「実際に何がいつ・どのoriginから送られたか」を
 時系列で確認できるようにする。
 
-start/stop/detectedは、broker.pyの_publish()がペイロード先頭1バイトに
-送信元originを入れているので、それをデコードして表示する。scanは自前の
-バイナリ形式(角度・dome角度・距離)。
-stateも参考として表示する(watch_state.pyと同じ"{origin}:{状態名}"形式)。
+start/stop/detected/stateは、hakoniwa_pduの標準メッセージ型(std_msgs/Bool,
+std_msgs/String)でエンコードされている(docs/pdu_ros_bridge_ros_zenoh_mapping.md
+参照)。start/stop/detectedはoriginを含まない単純なトリガーのため送信元は
+表示しない。stateは"{origin}:{状態名}"形式なので送信元を表示できる。
+scanは今のところROSへ直接渡らない内部専用チャンネルのため、従来通り
+自前のバイナリ形式(origin・角度・dome角度・距離)のまま。
 
 使い方:
   python3 bridge/watch_all.py [--config path/to/endpoint_zenoh.json] 2>/dev/null
@@ -28,6 +30,7 @@ import struct
 import sys
 import time
 
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_String import pdu_to_py_String
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,10 +45,6 @@ def _now() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
-def _origin_of(payload: bytes) -> str:
-    return str(payload[0]) if payload else "?"
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="全PDUメッセージ(生のトリガー含む)を時系列で観測する")
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
@@ -57,8 +56,8 @@ def main() -> int:
     endpoint.post_start()
 
     def _make_trigger_cb(pdu_name: str):
-        def _cb(_key, payload: bytes) -> None:
-            print(f"[{_now()}] origin={_origin_of(payload):<3} {pdu_name}", flush=True)
+        def _cb(_key, _payload: bytes) -> None:
+            print(f"[{_now()}] {pdu_name}", flush=True)
 
         return _cb
 
@@ -81,7 +80,11 @@ def main() -> int:
     endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="scan"), _on_scan)
 
     def _on_state(_key, payload: bytes) -> None:
-        text = payload.rstrip(b"\x00").decode("utf-8", errors="replace")
+        try:
+            text = pdu_to_py_String(bytearray(payload)).data
+        except (ValueError, struct.error):
+            print(f"[{_now()}]         state (unpack失敗)", flush=True)
+            return
         origin, _, state_name = text.partition(":")
         print(f"[{_now()}] origin={origin:<3} state -> {state_name or text}", flush=True)
 
