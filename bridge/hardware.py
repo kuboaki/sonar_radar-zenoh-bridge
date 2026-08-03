@@ -54,6 +54,10 @@ class RadarHardware(abc.ABC):
         """radar_baseの回転方向を反転する(止めずに切り替える)。"""
 
     @abc.abstractmethod
+    def radar_base_get_position(self) -> int:
+        """radar_baseの現在のドーム角度(度)を返す。"""
+
+    @abc.abstractmethod
     def marker_detector_is_detected(self) -> bool:
         """marker_detector(色センサー)がマーカーを新たに検出したか(立ち上がりエッジ)。"""
 
@@ -128,6 +132,11 @@ class RealHardware(RadarHardware):
         if self._radar_base is not None:
             self._radar_base.invert_direction()
 
+    def radar_base_get_position(self) -> int:
+        if self._radar_base is None:
+            return 0
+        return self._radar_base.get_position()
+
     def marker_detector_is_detected(self) -> bool:
         if self._marker_detector is None:
             return False
@@ -188,6 +197,9 @@ class HakoHardware(RadarHardware):
 
     def radar_base_invert_direction(self) -> None:
         self._radar_base.invert_direction()
+
+    def radar_base_get_position(self) -> int:
+        return self._radar_base.get_position()
 
     def marker_detector_is_detected(self) -> bool:
         return self._marker_detector.is_detected()

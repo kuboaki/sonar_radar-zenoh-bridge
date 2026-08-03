@@ -48,6 +48,7 @@ class RealRadarBase:
         self._align_speed = align_speed
         # dome_to_motor(sensor_home_offset_deg) と同じ換算(sonar_radar.py参照)
         self._offset_deg = round(-sensor_home_offset_deg * gear_ratio)
+        self._gear_ratio = gear_ratio
         self._hat = hat
         self._hat.port_config(self._port, spikehat.DEVICE_MOTOR_L)
         self._stage: str | None = None  # None→未開始, "to_zero", "to_offset", "done"
@@ -100,3 +101,11 @@ class RealRadarBase:
         """回転方向を反転する(PWM符号反転、止めずに切り替える)。"""
         self._pwm = -self._pwm
         self._hat.motor_pwm(self._port, self._pwm)
+
+    def get_position(self) -> int:
+        """現在のドーム角度(度、zero_pos基準)を返す。"""
+        try:
+            current = self._hat.motor_get_position(self._port)
+        except RuntimeError:
+            return 0
+        return round((current - self.zero_pos) / self._gear_ratio)

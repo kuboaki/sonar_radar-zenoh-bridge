@@ -76,6 +76,7 @@ def run_app(
     radar_base_is_calibrated: Optional[Callable[[], bool]] = None,
     radar_base_run: Optional[Callable[[], None]] = None,
     radar_base_stop: Optional[Callable[[], None]] = None,
+    radar_base_get_position: Optional[Callable[[], int]] = None,
     scanner_get_distance: Optional[Callable[[], int]] = None,
 ) -> int:
     """SonarRadarAppを構築し、is_terminated()になるかタイムアウトするまで動かす。
@@ -111,6 +112,7 @@ def run_app(
         radar_base_is_calibrated=radar_base_is_calibrated,
         radar_base_run=radar_base_run,
         radar_base_stop=radar_base_stop,
+        radar_base_get_position=radar_base_get_position,
         scanner_get_distance=scanner_get_distance,
         calibration_timeout_sec=calibration_timeout_sec,
         scanning_timeout_sec=scanning_timeout_sec,

@@ -136,6 +136,7 @@ def main() -> None:
             radar_base_run=hardware.radar_base_run,
             radar_base_stop=hardware.radar_base_stop,
             radar_base_invert_direction=hardware.radar_base_invert_direction,
+            radar_base_get_position=hardware.radar_base_get_position,
         )
         return 0
 

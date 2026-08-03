@@ -38,8 +38,8 @@
 
 上記の設計を成立させるには、以下の既存ギャップの解消が前提となる。
 
-1. **`scan`の`angle`が常に0固定**: `bridge/sonar_radar_app.py`の`_tick_scanning()`で`self._broker.publish_scan(angle=0, distance_mm=distance_mm)`と実角度が配線されていない。`radar_base`側にはモーター位置取得(`motor_get_position()`)が既にあるため、これを`radar_base_get_position()`のような形で公開し、`_tick_scanning()`から実際の角度を渡すよう配線する必要がある(実機とSIMを同じ2次元グラフ上で比較するために必須、とのユーザー判断)。
-2. **既存の`start`/`stop`/`detected`/`state`のバイナリ実装の置き換え**: `bridge/broker.py`は`sonar_radar`・`sonar_radar_sim`・`pdu_ros_bridge`が共有するため、型を変更すると3者とも同時に実装を変更する必要がある(動作確認済みの既存チャンネルへの変更を伴う)。
+1. **`scan`の`angle`が常に0固定**: (2026-08-03 解消済み) `radar_base`に`get_position()`(zero_pos基準のドーム角度、度)を追加し、`hardware.py`経由で`radar_base_get_position()`として`sonar_radar_app.py`の`_tick_scanning()`から呼び出すよう配線した。Astah側もSCANNINGのdoActivityに`radar_base_get_position()`を追記済み。1プロセス自己ループバックで動作確認済み。
+2. **既存の`start`/`stop`/`detected`/`state`のバイナリ実装の置き換え**: `bridge/broker.py`は`sonar_radar`・`sonar_radar_sim`・`pdu_ros_bridge`が共有するため、型を変更すると3者とも同時に実装を変更する必要がある(動作確認済みの既存チャンネルへの変更を伴う)。(未着手)
 
 ## 影響範囲
 
