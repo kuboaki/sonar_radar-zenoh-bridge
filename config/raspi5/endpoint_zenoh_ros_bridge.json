@@ -1,0 +1,6 @@
+{
+  "name": "sonar_radar_ros_bridge_start_stop",
+  "pdu_def_path": "../../pdu/pdudef.json",
+  "cache": "cache/buffer.json",
+  "comm": "comm/zenoh_ros_start_stop_comm.json"
+}

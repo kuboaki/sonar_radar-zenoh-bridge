@@ -1,5 +1,5 @@
 {
-  "endpoint_config": "endpoint_zenoh.json",
+  "endpoint_config": "endpoint_zenoh_ros_bridge.json",
   "bindings": [
     {
       "pdu_key": { "robot_name": "Radar", "pdu_name": "start" },
