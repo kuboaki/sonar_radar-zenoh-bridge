@@ -150,10 +150,23 @@ def run_app(
             elapsed += tick_interval_sec
     finally:
         # 正常にTERMINATEDへ到達した場合は、SonarRadarApp自身が
-        # TERMINATEDのentryでbroker.close()を既に行っている(exitと
-        # entryの二重close()を避けるため、未到達=タイムアウト時のみ
-        # ここで安全網としてclose()する)。
+        # TERMINATEDのentryでradar_base_stop()・broker.close()を既に
+        # 行っている(未到達=タイムアウト時のみ、ここで安全網として
+        # 同じ後始末をする)。
+        #
+        # 【2026-08-03の教訓】radar_base_stop()を忘れてbroker.close()
+        # だけ行っていたため、SCANNING中にoverall_timeout_secで打ち切ら
+        # れるとモーターが回転したまま実機に取り残される事故があった
+        # (radar_base_stop()はTERMINATEDのentryでしか呼ばれない設計
+        # だったため)。実機を物理的に安全な状態にすることを、状態機械
+        # の設計を歪めずに行うため、ここでの停止はTERMINATED entryの
+        # 代替ではなく最終防衛線として位置づける。
         if not app.is_terminated():
+            if radar_base_stop is not None:
+                try:
+                    radar_base_stop()
+                except Exception as e:
+                    print(f"[{prefix}] (radar_base_stop failed: {e})", file=sys.stderr)
             broker.close()
 
     if app.is_terminated():
