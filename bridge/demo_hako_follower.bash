@@ -2,7 +2,9 @@
 # demo_hako_follower.bash — Mac(シミュレータ)をfollowerとして起動する。
 # 実機+Macの2台構成デモ用(demo_real_leader.bashの相方)。followerは
 # starter操作なしで、radar/starter/startの受信のみでSCANNINGへ
-# 直接遷移する設計のため、--hako-starterは指定しない。
+# 直接遷移する設計のため、--hako-starterは指定せず、明示的に--no-starterを
+# 付ける(is_starterを省略した場合の既定値はis_leaderと同値でどのみち
+# falseになるが、「明示的な方がよい」という方針に合わせている)。
 #
 # キャリブレーションはマシン間協調を廃止しローカル完結になったため、
 # 実機とMacの起動順序は自由(以前はキャリブレーション待ち合わせのため
@@ -36,12 +38,13 @@ MUJOCO_ROBOTS_DIR="$(cd "${SCRIPT_DIR}/../../hakoniwa-mujoco-robots" && pwd)"
 
 source "${SCRIPT_DIR}/env.sh"
 
-echo "=== run_hako.py (follower, origin=5) ==="
+echo "=== run_hako.py (follower, origin=5, --no-starter) ==="
 echo "(plant/ビューアが別ターミナルで起動済みであること。登録完了後、"
 echo " 別ターミナルで hako-cmd start を実行すること)"
 
 cd "${MUJOCO_ROBOTS_DIR}"
 exec bash run-hakopy.bash "${SCRIPT_DIR}/run_hako.py" \
   --origin 5 \
+  --no-starter \
   --calibration-timeout 60 \
   --timeout 90
