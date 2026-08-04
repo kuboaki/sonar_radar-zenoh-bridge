@@ -59,23 +59,17 @@ venvの活性化は不要(`run-hakopy.bash`内部で`hakoniwa-mujoco-robots/.ven
 **ROSからstart/stopを注入する運用のときは、demo_hako_leader.bashは
 使わない**(あちらはMuJoCoビューアのSpaceキー操作を前提にした
 `--hako-starter`版なので、ROS注入と役割が競合する)。代わりに
-`--no-starter`を指定して直接起動する。
+`demo_hako_follower.bash`を`LEADER=1`付きで起動する
+(2026-08-04追加、下記「leaderの交換」参照)。
 
 ```bash
-cd ~/Projects/hakoniwa-mujoco-robots
-source ~/Projects/sonar_radar-zenoh-bridge/bridge/env.sh
-bash run-hakopy.bash ~/Projects/sonar_radar-zenoh-bridge/bridge/run_hako.py \
-  --origin 1 \
-  --leader \
-  --no-starter \
-  --calibration-timeout 60 \
-  --timeout 90
+cd ~/Projects/sonar_radar-zenoh-bridge
+LEADER=1 bash bridge/demo_hako_follower.bash
 ```
 
 `'SonarRadarZenohBridgeController' 登録完了。hako-cmd start を待機中...`
-の表示を待つ。venvの活性化はここも不要(env.shはhakoniwa_pdu_endpoint用の
-環境変数だけを設定するもので、Pythonのvenv切り替えは`run-hakopy.bash`が
-内部で行う)。
+の表示を待つ。venvの活性化はここも不要(`run-hakopy.bash`が内部で
+`hakoniwa-mujoco-robots/.venv`への切り替えを行う)。
 
 ### 4. Mac: 別端末で`hako-cmd start`を実行
 
@@ -124,6 +118,26 @@ SIM(手順3)・実機(手順5)の両方の端末で`SCANNING`への遷移が表�
 ```bash
 bash config/raspi5/demo_ros_stop.bash
 ```
+
+## leaderの交換
+
+`demo_real_follower.bash`・`demo_hako_follower.bash`はどちらも既定では
+follower(`--leader`なし)。ROSからstart/stopを注入する2台構成では、
+どちらかが必ずleaderを持たないと誰もマーカー検出/反転をせずSCANNINGが
+タイムアウトする(SCAN_FAILED)。`LEADER=1`環境変数を付けると、その場で
+leader/follower役を交換できる:
+
+```bash
+# 実機をleaderにする場合(SIM側はLEADER無しでfollowerのまま)
+LEADER=1 bash bridge/demo_real_follower.bash
+
+# SIMをleaderにする場合(実機側はLEADER無しでfollowerのまま)
+LEADER=1 bash bridge/demo_hako_follower.bash
+```
+
+starterは常に`--no-starter`のまま(ROS駆動なので、leader/followerどちらの
+役でも物理starterは使わない)。origin番号も役割に関わらず固定
+(実機=2、SIM=5)。
 
 ## 既知の注意点
 

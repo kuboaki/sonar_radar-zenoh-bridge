@@ -1,10 +1,18 @@
 #!/bin/bash
-# demo_hako_follower.bash — Mac(シミュレータ)をfollowerとして起動する。
-# 実機+Macの2台構成デモ用(demo_real_leader.bashの相方)。followerは
-# starter操作なしで、radar/starter/startの受信のみでSCANNINGへ
+# demo_hako_follower.bash — Mac(シミュレータ)をROS駆動(--no-starter)で
+# 起動する。starter操作なしで、radar/starter/startの受信のみでSCANNINGへ
 # 直接遷移する設計のため、--hako-starterは指定せず、明示的に--no-starterを
 # 付ける(is_starterを省略した場合の既定値はis_leaderと同値でどのみち
 # falseになるが、「明示的な方がよい」という方針に合わせている)。
+#
+# 既定はfollower(--leaderなし)。ROSからstart/stopを注入する2台構成では、
+# 実機・SIMのどちらかが必ずleaderを持つ必要がある(両方followerだと誰も
+# マーカー検出/反転をしないためSCANNINGがタイムアウトしSCAN_FAILEDになる、
+# 2026-08-04に実地で確認)。LEADER=1環境変数でどちらをleaderにするか
+# その場で交換できる(bridge/demo_real_follower.bashと同じ仕組み):
+#   LEADER=1 bash bridge/demo_hako_follower.bash   # SIMをleaderにする
+#   bash bridge/demo_hako_follower.bash             # SIMはfollowerのまま
+#                                                    # (実機側をLEADER=1にする)
 #
 # キャリブレーションはマシン間協調を廃止しローカル完結になったため、
 # 実機とMacの起動順序は自由(以前はキャリブレーション待ち合わせのため
@@ -38,13 +46,25 @@ MUJOCO_ROBOTS_DIR="$(cd "${SCRIPT_DIR}/../../hakoniwa-mujoco-robots" && pwd)"
 
 source "${SCRIPT_DIR}/env.sh"
 
-echo "=== run_hako.py (follower, origin=5, --no-starter) ==="
+LEADER_FLAG=()
+ROLE="follower"
+if [ "${LEADER:-0}" = "1" ]; then
+  LEADER_FLAG=(--leader)
+  ROLE="leader"
+fi
+
+echo "=== run_hako.py (${ROLE}, origin=5, --no-starter) ==="
 echo "(plant/ビューアが別ターミナルで起動済みであること。登録完了後、"
 echo " 別ターミナルで hako-cmd start を実行すること)"
 
 cd "${MUJOCO_ROBOTS_DIR}"
+# LEADER_FLAGが空配列のとき、bashのバージョン/ビルドによっては
+# set -u下で"${LEADER_FLAG[@]}"が unbound variable になることがある
+# (Mac同梱のbash 5.3で実際に発生を確認)。${arr[@]+"${arr[@]}"}は
+# 空配列でも未設定変数でも安全に展開できる定番の書き方。
 exec bash run-hakopy.bash "${SCRIPT_DIR}/run_hako.py" \
   --origin 5 \
+  ${LEADER_FLAG[@]+"${LEADER_FLAG[@]}"} \
   --no-starter \
   --calibration-timeout 60 \
   --timeout 90
