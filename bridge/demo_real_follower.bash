@@ -28,6 +28,9 @@ cd "${SCRIPT_DIR}"
 echo "=== cleanup ==="
 bash cleanup.bash --skip-watchers
 
+# 実機用venv(hakoniwa-pdu等が入っている)。手作業でactivateを忘れる事故が
+# あったため、ここで自動化する。
+source "${SCRIPT_DIR}/../.venv/bin/activate"
 source env.sh
 
 echo "=== run_real.py (follower, origin=2, 実機ハードウェア, --no-starter) ==="
