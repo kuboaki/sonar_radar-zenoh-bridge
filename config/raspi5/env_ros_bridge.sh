@@ -20,19 +20,17 @@ source ~/Projects/ros2_ws/install/setup.bash
 export HAKONIWA_PDU_ENDPOINT_PYTHON_PATH="$HOME/.local/lib/hakoniwa-pdu-endpoint/python"
 export PYTHONPATH="$HOME/Projects/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
 
-# 【2026-08-04の教訓】~/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint/
-# にはlibhakoniwa_pdu_endpoint.soしか置かれておらず、その依存先libzenohc.soは
-# 同梱されていない(install.bash側の既知の欠落)。そのため上のsource文で
-# /opt/ros/jazzy/setup.bashを読み込むと、そちらが持つ別ビルドのzenoh-c
-# (/opt/ros/jazzy/opt/zenoh_cpp_vendor/lib/libzenohc.so、rmw_zenoh用に
-# 別途ビルドされた別バージョン)がLD_LIBRARY_PATH経由で拾われてしまい、
-# 当方のcomm_zenoh.cppをビルドした時のzenoh-cとABIが食い違う。この状態で
-# ZenohComm::send()を呼ぶ(=start/stop等をZenohへ転送する)と
-# "stack smashing detected"で毎回ではないが再現性高くクラッシュする実害が
-# あった(hakoniwa_pdu_rosブリッジ経由のROS start/stop注入テストで発見)。
-# 当方が実際にビルドしたlibzenohc.so
-# (~/Projects/hakoniwa-pdu-endpoint/build/_deps/zenohc-build/release/target/release)
-# を明示的に先頭へ入れ、ROS側の同名ライブラリより先に解決させることで回避する。
-# 根本対策としては、hakoniwa-pdu-endpoint側のinstall.bashがlibzenohc.soも
-# .localへ同梱するよう直すべき(未対応、上流への報告も未実施)。
-export LD_LIBRARY_PATH="$HOME/Projects/hakoniwa-pdu-endpoint/build/_deps/zenohc-build/release/target/release:$HOME/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint:/usr/local/hakoniwa/lib:${LD_LIBRARY_PATH:-}"
+# 【2026-08-04の教訓、2026-08-04に根本修正済み】以前はここでlibzenohc.soの
+# ビルドディレクトリを明示的にLD_LIBRARY_PATHへ足す回避策を入れていた。
+# 原因は~/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint/に
+# libhakoniwa_pdu_endpoint.soしか置かれておらず依存先libzenohc.soが
+# 同梱されていなかったこと(install.bash側の既知の欠落)。/opt/ros/jazzy/
+# setup.bashが読み込むROS自前の別バージョンzenoh-c
+# (/opt/ros/jazzy/opt/zenoh_cpp_vendor/lib/libzenohc.so)がLD_LIBRARY_PATH
+# 経由で誤って拾われ、ABI不整合で"stack smashing detected"が起きていた。
+# hakoniwa-pdu-endpoint側でlibzenohc.soをlibhakoniwa_pdu_endpoint.soと
+# 同じディレクトリへ同梱するよう修正したため(install.bashのZenoh対応、
+# 別途対応)、下のLD_LIBRARY_PATHが指す.localディレクトリ自体に正しい
+# libzenohc.soが同梱されており、ビルドディレクトリを明示的に指す回避策は
+# 不要になった。
+export LD_LIBRARY_PATH="$HOME/.local/lib/hakoniwa-pdu-endpoint/python/hakoniwa_pdu_endpoint:/usr/local/hakoniwa/lib:${LD_LIBRARY_PATH:-}"

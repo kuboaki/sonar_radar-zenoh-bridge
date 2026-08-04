@@ -66,17 +66,25 @@ distance_mmの実センサー配線とscan_batchの実装は保留し、まず�
    }
    ```
    **専用のcomm/endpoint設定が必要**: `hakoniwa_pdu_ros`はbinding設定と実際のzenoh comm設定(`notify_on_recv`)の整合性を`validate_zenoh_io_for_config()`で検証する。`config/raspi5/comm/zenoh_pubsub_comm.json`(全チャンネル`notify_on_recv:true`、`sonar_radar`本体用)をそのまま使うと、`start`/`stop`が`ros_to_pdu`(送信のみ、受信通知不要)であることと矛盾し検証エラーになる。そのため`config/raspi5/comm/zenoh_ros_start_stop_comm.json`(`start`/`stop`のみ`notify_on_recv:false`)と、それを参照する`config/raspi5/endpoint_zenoh_ros_bridge.json`を別途新設した。生成コマンド: `python3 -m hakoniwa_pdu_ros.gen_zenoh_io <binding.json> --comm <comm.json> --write`。
-4. **Pi5での起動**: `config/raspi5/env_ros_bridge.sh`(新設、必要な環境変数をまとめたもの)を`source`してから起動する。
+4. **Pi5での起動**: `config/raspi5/env_ros_bridge.sh`(新設、必要な環境変数をまとめたもの)を`source`してから起動する。デモ用に`config/raspi5/run_ros_bridge.bash`としてまとめてある(下記5参照)。
    ```bash
    cd ~/Projects/sonar_radar-zenoh-bridge
    source config/raspi5/env_ros_bridge.sh
    ros2 run hakoniwa_pdu_ros bridge --config config/raspi5/ros_bindings_start_stop.json
    ```
-   **既知の不具合**: `hakoniwa_pdu_ros/__main__.py`に`if __name__ == "__main__": main()`が無く、`python3 -m hakoniwa_pdu_ros`で実行すると`main()`が一度も呼ばれずに無出力・exit 0で終了する(何も起きない)。`ros2 run`のconsole_scriptsエントリポイントは`main()`を直接呼ぶため問題ない。Pi5では、ソース(`~/Projects/hakoniwa-pdu-ros/hakoniwa_pdu_ros/__main__.py`)にガードを追記して`colcon build --packages-select hakoniwa_pdu_ros`で再ビルド済み(`~/Projects/ros2_ws`)。上流へIssue報告済み: [hakoniwalab/hakoniwa-pdu-ros#13](https://github.com/hakoniwalab/hakoniwa-pdu-ros/issues/13)。
-5. **ROS側の「スターターもどき」**: 専用ノードはまだ作らず、`ros2 topic pub`での手動トリガーで動作確認する。
+   **既知の不具合(解消済み)**: `hakoniwa_pdu_ros/__main__.py`に`if __name__ == "__main__": main()`が無く、`python3 -m hakoniwa_pdu_ros`で実行すると`main()`が一度も呼ばれずに無出力・exit 0で終了する(何も起きない)。`ros2 run`のconsole_scriptsエントリポイントは`main()`を直接呼ぶため問題ない。Pi5では、ソース(`~/Projects/hakoniwa-pdu-ros/hakoniwa_pdu_ros/__main__.py`)にガードを追記して`colcon build --packages-select hakoniwa_pdu_ros`で再ビルド済み(`~/Projects/ros2_ws`)。上流へIssue報告済み: [hakoniwalab/hakoniwa-pdu-ros#13](https://github.com/hakoniwalab/hakoniwa-pdu-ros/issues/13)。
+   **既知の不具合(2026-08-04に解消済み)**: `hakoniwa_pdu_ros`ブリッジがstart/stopを中継する際、「stack smashing detected」で非決定的にクラッシュすることがあった。gdbで追跡した結果、依存先の`libzenohc.so`が`hakoniwa-pdu-endpoint`の`.local`インストールに同梱されておらず、実行環境(ROS2 Jazzyの`zenoh_cpp_vendor`パッケージ)が持つ別バージョンのzenoh-cをLD_LIBRARY_PATH経由で誤って読み込み、ABI不整合でスタックが壊れていたことが原因。`hakoniwa-pdu-endpoint`の`install.bash`を修正し、Zenoh有効時は依存先zenoh-cの共有ライブラリも`libhakoniwa_pdu_endpoint.so`と同じディレクトリへ同梱するようにした(`HAKO_PDU_ENDPOINT_ENABLE_ZENOH=ON bash install.bash`)ため、`env_ros_bridge.sh`側の特別な回避策は不要になった。
+5. **ROS側の「スターターもどき」**: 専用ノードはまだ作らず、`ros2 topic pub`での手動トリガーで動作確認する。デモを楽にするため、以下3本のスクリプトを`config/raspi5/`に用意した(いずれもPi5で実行すること)。
    ```bash
-   ros2 topic pub --once /sonar_radar/start_cmd std_msgs/msg/Bool "{data: true}"
-   ros2 topic pub --once /sonar_radar/stop_cmd  std_msgs/msg/Bool "{data: true}"
-   ```
+   # 1. ブリッジを起動する(別ターミナルでフォアグラウンド実行、Ctrl-Cで停止)
+   bash config/raspi5/run_ros_bridge.bash
 
-**実機Pi5での動作確認(2026-08-03)**: `bridge/watch_all.py`(Mac)を監視しつつ、Pi5で上記2〜5の手順を実施し、`ros2 topic pub`で送った`start`がZenoh側で受信できることを確認済み(`sonar_radar`/`sonar_radar_sim`本体との統合実行はまだ)。
+   # 2. startを注入する(実機・SIMのどちらが動いていても、両方動いていても届く)
+   bash config/raspi5/demo_ros_start.bash
+
+   # 3. stopを注入する
+   bash config/raspi5/demo_ros_stop.bash
+   ```
+   中身は`ros2 topic pub --once /sonar_radar/start_cmd std_msgs/msg/Bool "{data: true}"`等をラップしただけ。`set -u`は使っていない(`/opt/ros/jazzy/setup.bash`が未定義変数を参照するため、strict mode下だと落ちる)。
+
+**動作確認(2026-08-04)**: Mac(SIM、`run_hako.py`)を相手に、`run_ros_bridge.bash`→`demo_ros_start.bash`→(WAIT_FOR_START_PRESS→SCANNING→マーカー検出/反転を確認)→`demo_ros_stop.bash`→TERMINATEDまで、ブリッジをクラッシュさせずに完走することを確認済み。実機(Pi4)側でも2026-08-03に同じ流れ(SCANNING到達)を確認済みだが、stopまでの完走はSIM側でのみ確認(実機は機材移動のため未実施)。
