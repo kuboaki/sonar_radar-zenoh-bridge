@@ -14,6 +14,13 @@
 #   bash bridge/demo_hako_follower.bash             # SIMはfollowerのまま
 #                                                    # (実機側をLEADER=1にする)
 #
+# 【2026-08-05の教訓】SIMがleaderのとき、既定の--scanning-timeout(8秒、
+# 実機のケーブル巻き込み防止に合わせた値)では、SIM自身が自分のマーカーを
+# 検出しきれずSCAN_FAILEDになることがあった。SIMには実機のようなケーブル
+# 巻き込みリスクが無い(sonar_radar_app.pyのdocstring参照)ため、SIM側だけ
+# 長めに設定してよい。SCANNING_TIMEOUT環境変数で上書きできる(既定20秒):
+#   SCANNING_TIMEOUT=25 LEADER=1 bash bridge/demo_hako_follower.bash
+#
 # キャリブレーションはマシン間協調を廃止しローカル完結になったため、
 # 実機とMacの起動順序は自由(以前はキャリブレーション待ち合わせのため
 # 実機を先に起動する必要があったが、その制約は無くなった)。ただし
@@ -52,8 +59,9 @@ if [ "${LEADER:-0}" = "1" ]; then
   LEADER_FLAG=(--leader)
   ROLE="leader"
 fi
+SCANNING_TIMEOUT="${SCANNING_TIMEOUT:-20}"
 
-echo "=== run_hako.py (${ROLE}, origin=5, --no-starter) ==="
+echo "=== run_hako.py (${ROLE}, origin=5, --no-starter, --scanning-timeout=${SCANNING_TIMEOUT}) ==="
 echo "(plant/ビューアが別ターミナルで起動済みであること。登録完了後、"
 echo " 別ターミナルで hako-cmd start を実行すること)"
 
@@ -66,5 +74,6 @@ exec bash run-hakopy.bash "${SCRIPT_DIR}/run_hako.py" \
   --origin 5 \
   ${LEADER_FLAG[@]+"${LEADER_FLAG[@]}"} \
   --no-starter \
+  --scanning-timeout "${SCANNING_TIMEOUT}" \
   --calibration-timeout 60 \
   --timeout 90
