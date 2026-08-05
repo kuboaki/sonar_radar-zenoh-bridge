@@ -63,7 +63,8 @@ MARKER_DETECTED/WAIT_FOR_STOP_RELEASEに共通の「自分のpublishが
 ループバックしてくるのを待つ」タイムアウト。3状態とも目的が同じ
 (Zenoh経由の自己確認)なので1つの属性にまとめている。
 
-SCANNING --[timer_is_fired()]--> WAIT_FOR_DETECTED_GRACE (scanning_timeout_sec、
+SCANNING --[timer_is_fired()][!is_leader]--> WAIT_FOR_DETECTED_GRACE、
+SCANNING --[timer_is_fired()][is_leader]--> SCAN_FAILED (scanning_timeout_sec、
 既定8秒、以下T1)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
 CALIBRATINGの20秒は「機構のずれを実機で外してはめ直す猶予」だが、
 SCANNINGのタイムアウトは「ドームが旋回しすぎてセンサーケーブルを
@@ -78,17 +79,28 @@ docs/development_log.md参照)。ケーブル巻き込みリスクは実機だ�
 (scanning_timeout_sec)、exitでtimer_stop()を行う(WAIT_FOR_INVERTからの
 再入時も含め、SCANNINGに入るたび1レッグ分としてタイマーを取り直す)。
 
-WAIT_FOR_DETECTED_GRACE(2026-08-05追加)は、T1が切れても即座に
-SCAN_FAILEDにせず、いったんradar_base_stop()でモーターを止めてから
-scan_grace_timeout_sec(既定15秒、以下T2)だけdetected受信の猶予を
-与える中間状態。実機とSIMのモーター個体差でお互いの旋回位置がズレて
-いくと、相手のdetected配信がT1に間に合わないことがある(長時間スキャン
-ほど蓄積して顕著)が、この猶予期間中は自機も静止しているためズレが
-それ以上広がらない。T2の間にdetectedを受信できれば通常のSCANNING同様
+WAIT_FOR_DETECTED_GRACE(2026-08-05追加、2026-08-05にis_leaderガードを追加)
+は、T1が切れても即座にSCAN_FAILEDにせず、いったんradar_base_stop()で
+モーターを止めてからscan_grace_timeout_sec(既定15秒、以下T2)だけ
+detected受信の猶予を与える中間状態。**ただしfollower(!is_leader)限定**。
+実機とSIMのモーター個体差でお互いの旋回位置がズレていくと、相手の
+detected配信がT1に間に合わないことがある(長時間スキャンほど蓄積して
+顕著)が、followerにとっての「detectedを待つ」は外部からの受信を待つ
+だけの行為なので、この猶予期間中は自機も静止しているためズレがそれ
+以上広がらない。T2の間にdetectedを受信できれば通常のSCANNING同様
 --[detectedを受信した]--> WAIT_FOR_INVERTへ進み反転・再開する。T2中も
 detectedが来なければ--[timer_is_fired()]--> SCAN_FAILEDへ進む(以降は
 従来通り)。モーターが止まっているためT1のようなケーブル巻き込み制約
-は無く、T2はT1より長めに設定できる。MARKER_DETECTEDの
+は無く、T2はT1より長めに設定できる。
+
+**leaderにはこの猶予を与えない(即SCAN_FAILED)。** leaderにとっての
+detectedは、自分が旋回してマーカーを物理的に通過して初めて生まれる
+ものなので、停止して待っても検出できる見込みはゼロになるだけ(実際に
+2026-08-05、シムleader+実機followerの2台構成で、leaderもfollowerと
+同時にT1切れとなり両方停止→leaderは二度と検出できず結局SCAN_FAILEDに
+落ちる、という実害が発生した)。停止後もケーブル巻き込みリスクの存在
+理由自体は消えないため、leaderのT1切れは従来通り即SCAN_FAILEDのまま
+とする。MARKER_DETECTEDの
 publish_confirm_timeout_secタイムアウト(自分のpublishのループバック
 確認)は、同期ズレとは性質が異なる通信不調の検知なので、この二段階化
 の対象外(元の直接SCAN_FAILEDのまま)。
@@ -355,7 +367,16 @@ class SonarRadarApp:
             return
         if self.timer_is_fired():
             self.timer_stop()  # exit(ドームのケーブル巻き込み防止のための早期カットオフ)
-            self._transition_to(State.WAIT_FOR_DETECTED_GRACE)
+            # is_leaderは、猶予(WAIT_FOR_DETECTED_GRACE)を与えず即SCAN_FAILEDへ
+            # 落とす。leaderのdetectedは自分が旋回してマーカーを物理的に
+            # 通過して初めて生まれるものなので、停止して待っても検出できる
+            # 見込みはゼロになるだけ(停止後もケーブル巻き込みリスクの
+            # 存在理由自体は消えない)。猶予が意味を持つのはfollowerだけ
+            # (外部からの受信を待つだけの行為なので、止まって待てる)。
+            if self.is_leader:
+                self._transition_to(State.SCAN_FAILED)
+            else:
+                self._transition_to(State.WAIT_FOR_DETECTED_GRACE)
 
     def _tick_wait_for_detected_grace(self) -> None:
         if self._broker.consume_detected_received():

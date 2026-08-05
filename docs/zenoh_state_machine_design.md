@@ -109,12 +109,14 @@ State: `sonar_radar::app::sonar_radar` の `run()` が駆動する `ZenohSonarRa
 
 長時間スキャンを続けるほど、モーター個体差による実機・シムの旋回位置ズレが蓄積し、`SCAN_FAILED`が発生しやすくなるという実運用上の困りごとが出た。上記の「followerがleaderに追従旋回する」案(位置追従)はZenoh遅延などの新たな懸念を伴う大きな変更になるため、まずはより軽量な対策として、`SCANNING`と`SCAN_FAILED`の間に`WAIT_FOR_DETECTED_GRACE`状態を新設した。
 
-- `SCANNING`の`timer_is_fired()`(`scanning_timeout_sec`、T1。ケーブル巻き込み防止の早期カットオフとしての役割はそのまま)は、即座に`SCAN_FAILED`にせず、まず`WAIT_FOR_DETECTED_GRACE`へ進む。
+- `SCANNING`の`timer_is_fired()`(`scanning_timeout_sec`、T1。ケーブル巻き込み防止の早期カットオフとしての役割はそのまま)は、`!is_leader`(follower)の場合のみ`WAIT_FOR_DETECTED_GRACE`へ進む。`is_leader`(leader)の場合は従来通り即`SCAN_FAILED`(下記「leaderには猶予を与えない」参照)。
 - `WAIT_FOR_DETECTED_GRACE`のentryで`radar_base_stop()`(モーター停止)+`timer_start(scan_grace_timeout_sec)`(T2、既定15秒)。**モーターが止まっているため、この間はケーブル巻き込みの制約が無く、T1より長めに取れる。**
 - この間に`detected`を受信すれば、通常の`SCANNING`と同じく`WAIT_FOR_INVERT`へ進み反転・再開する。**自機が静止している間は位置ズレが広がらない**ため、位置追従ほど厳密ではないが、待っている間にズレが悪化しないという実質的な効果がある。
 - T2も切れれば、そこで初めて`SCAN_FAILED`へ進む(以降は従来通り)。
 - `MARKER_DETECTED`の`timer_is_fired()`(`publish_confirm_timeout_sec`、自分のpublishのループバック確認)は対象外のまま(同期ズレではなく通信不調の検知のため、二段階化していない)。
 - タイマーは1つの共有インスタンス(`self._timer`)を状態ごとに`timer_start()`し直す既存の作法をそのまま踏襲しており、T1・T2用に別々のタイマーは不要(状態が逐次的で同時に動かないため)。
+
+**leaderには猶予を与えない(設計ミスとして2026-08-05に修正)**: 初版の実装では`is_leader`を問わず一律で`WAIT_FOR_DETECTED_GRACE`へ進んでいたが、これは誤りだった。leaderにとっての`detected`は、自分が旋回してマーカーを物理的に通過して初めて生まれるものであり、外部から受信するだけのfollowerとは性質が全く異なる。leaderを停止させて「猶予」を与えても、停止している間はマーカーを検出できる見込みが無いため、待てば待つほど確実に失敗するだけになる。実際、シムleader+実機followerの2台構成で、両者がほぼ同時にT1切れ(同じstartで同時にSCANNINGへ入り、同じT1値のため)となった際、leader側も`WAIT_FOR_DETECTED_GRACE`で停止してしまい、二度と自分のマーカーを検出できず`SCAN_FAILED`に落ちる、という実害が発生した(ユーザー報告により発覚)。停止後もケーブル巻き込みリスクの存在理由自体は消えないため、`SCANNING --[timer_is_fired()][is_leader]--> SCAN_FAILED`(猶予無し)、`SCANNING --[timer_is_fired()][!is_leader]--> WAIT_FOR_DETECTED_GRACE`(猶予あり)とガード条件で分岐するよう修正した。
 
 将来、位置追従方式そのものに着手する場合も、この二段階タイムアウトは安全装置(暴走・通信途絶時のフォールバック)として引き続き必要と考えられる。
 
