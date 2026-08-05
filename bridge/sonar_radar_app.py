@@ -63,8 +63,8 @@ MARKER_DETECTED/WAIT_FOR_STOP_RELEASEに共通の「自分のpublishが
 ループバックしてくるのを待つ」タイムアウト。3状態とも目的が同じ
 (Zenoh経由の自己確認)なので1つの属性にまとめている。
 
-SCANNING --[timer_is_fired()]--> SCAN_FAILED (scanning_timeout_sec、
-既定8秒)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
+SCANNING --[timer_is_fired()]--> WAIT_FOR_DETECTED_GRACE (scanning_timeout_sec、
+既定8秒、以下T1)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
 CALIBRATINGの20秒は「機構のずれを実機で外してはめ直す猶予」だが、
 SCANNINGのタイムアウトは「ドームが旋回しすぎてセンサーケーブルを
 巻き込む前に止める」ための早期カットオフ。基準値は実機実測(マーカー間
@@ -77,6 +77,21 @@ docs/development_log.md参照)。ケーブル巻き込みリスクは実機だ�
 自体の既定値8秒は安全側=実機に合わせたもの)。entryでtimer_start
 (scanning_timeout_sec)、exitでtimer_stop()を行う(WAIT_FOR_INVERTからの
 再入時も含め、SCANNINGに入るたび1レッグ分としてタイマーを取り直す)。
+
+WAIT_FOR_DETECTED_GRACE(2026-08-05追加)は、T1が切れても即座に
+SCAN_FAILEDにせず、いったんradar_base_stop()でモーターを止めてから
+scan_grace_timeout_sec(既定15秒、以下T2)だけdetected受信の猶予を
+与える中間状態。実機とSIMのモーター個体差でお互いの旋回位置がズレて
+いくと、相手のdetected配信がT1に間に合わないことがある(長時間スキャン
+ほど蓄積して顕著)が、この猶予期間中は自機も静止しているためズレが
+それ以上広がらない。T2の間にdetectedを受信できれば通常のSCANNING同様
+--[detectedを受信した]--> WAIT_FOR_INVERTへ進み反転・再開する。T2中も
+detectedが来なければ--[timer_is_fired()]--> SCAN_FAILEDへ進む(以降は
+従来通り)。モーターが止まっているためT1のようなケーブル巻き込み制約
+は無く、T2はT1より長めに設定できる。MARKER_DETECTEDの
+publish_confirm_timeout_secタイムアウト(自分のpublishのループバック
+確認)は、同期ズレとは性質が異なる通信不調の検知なので、この二段階化
+の対象外(元の直接SCAN_FAILEDのまま)。
 """
 
 from __future__ import annotations
@@ -102,6 +117,7 @@ class State(enum.Enum):
     WAIT_FOR_START_RELEASE = "WAIT_FOR_START_RELEASE"
     WAIT_FOR_SCAN_START = "WAIT_FOR_SCAN_START"
     SCANNING = "SCANNING"
+    WAIT_FOR_DETECTED_GRACE = "WAIT_FOR_DETECTED_GRACE"
     MARKER_DETECTED = "MARKER_DETECTED"
     WAIT_FOR_INVERT = "WAIT_FOR_INVERT"
     WAIT_FOR_STOP_PRESS = "WAIT_FOR_STOP_PRESS"
@@ -130,6 +146,7 @@ class SonarRadarApp:
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 20.0,
         scanning_timeout_sec: float = 8.0,
+        scan_grace_timeout_sec: float = 15.0,
         publish_confirm_timeout_sec: float = 2.0,
     ) -> None:
         # brokerはコンストラクタで構築済み(集約、生成・破棄は呼び出し側の
@@ -149,6 +166,7 @@ class SonarRadarApp:
         self._state = State.INIT
         self._calibration_timeout_sec = calibration_timeout_sec
         self._scanning_timeout_sec = scanning_timeout_sec
+        self._scan_grace_timeout_sec = scan_grace_timeout_sec
         self._publish_confirm_timeout_sec = publish_confirm_timeout_sec
         # 実機とシミュレータでは、ハードウェア初期化の中身も外見も異なる
         # (実機: ファームウェアロード等の複数手順・ブロッキング、
@@ -237,6 +255,8 @@ class SonarRadarApp:
             self._tick_wait_for_scan_start()
         elif self._state is State.SCANNING:
             self._tick_scanning()
+        elif self._state is State.WAIT_FOR_DETECTED_GRACE:
+            self._tick_wait_for_detected_grace()
         elif self._state is State.MARKER_DETECTED:
             self._tick_marker_detected()
         elif self._state is State.WAIT_FOR_INVERT:
@@ -335,6 +355,15 @@ class SonarRadarApp:
             return
         if self.timer_is_fired():
             self.timer_stop()  # exit(ドームのケーブル巻き込み防止のための早期カットオフ)
+            self._transition_to(State.WAIT_FOR_DETECTED_GRACE)
+
+    def _tick_wait_for_detected_grace(self) -> None:
+        if self._broker.consume_detected_received():
+            self.timer_stop()  # exit
+            self._transition_to(State.WAIT_FOR_INVERT)
+            return
+        if self.timer_is_fired():
+            self.timer_stop()  # exit
             self._transition_to(State.SCAN_FAILED)
 
     def _tick_marker_detected(self) -> None:
@@ -382,6 +411,9 @@ class SonarRadarApp:
         elif new_state is State.SCANNING:
             self.radar_base_run()  # entry
             self.timer_start(self._scanning_timeout_sec)  # entry
+        elif new_state is State.WAIT_FOR_DETECTED_GRACE:
+            self.radar_base_stop()  # entry
+            self.timer_start(self._scan_grace_timeout_sec)  # entry
         elif new_state is State.MARKER_DETECTED:
             self._broker.publish_detected()  # entry
             self.timer_start(self._publish_confirm_timeout_sec)  # entry

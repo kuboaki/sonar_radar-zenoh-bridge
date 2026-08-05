@@ -97,8 +97,19 @@ def main() -> None:
         "--scanning-timeout", type=float, default=8.0,
         help="SCANNINGのタイムアウト秒数(既定8秒、run_real.pyと同値)。ドームが"
         "旋回しすぎてセンサーケーブルを巻き込む前に止める早期カットオフ。"
-        "followerとして相手(leader)のdetectedを待つ場合にも同じタイマーを使う"
-        "ため、leader側の値より短くしてはならない(docs/zenoh_state_machine_design.md参照)",
+        "2026-08-05にWAIT_FOR_DETECTED_GRACE(--scan-grace-timeout)を導入した"
+        "ため、以前あった「followerはleaderより短くしてはならない」という制約は"
+        "緩和されている(このタイマーが切れてもすぐSCAN_FAILEDにはならず、"
+        "モーターを止めて--scan-grace-timeoutの間さらに待つ)",
+    )
+    parser.add_argument(
+        "--scan-grace-timeout", type=float, default=15.0,
+        help="WAIT_FOR_DETECTED_GRACEのタイムアウト秒数(既定15秒)。SCANNINGの"
+        "--scanning-timeoutが切れてもすぐSCAN_FAILEDにせず、モーターを止めた"
+        "状態でこの秒数だけdetected受信を追加で待つ猶予期間(実機/SIM間の"
+        "旋回位置ズレでdetectedが遅れても、この間は静止しているためズレが"
+        "広がらない)。モーター停止中はケーブル巻き込みの制約が無いため"
+        "--scanning-timeoutより長めに設定できる",
     )
     parser.add_argument(
         "--publish-confirm-timeout", type=float, default=2.0,
@@ -134,6 +145,7 @@ def main() -> None:
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
             scanning_timeout_sec=args.scanning_timeout,
+            scan_grace_timeout_sec=args.scan_grace_timeout,
             publish_confirm_timeout_sec=args.publish_confirm_timeout,
             hardware_initialize=hardware.initialize,
             starter_is_pushed=hardware.starter_is_pushed,

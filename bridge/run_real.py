@@ -92,6 +92,15 @@ def main() -> int:
         "ケーブル巻き込みリスクは実機のみの制約のため、シム側より小さめの既定値",
     )
     parser.add_argument(
+        "--scan-grace-timeout", type=float, default=15.0,
+        help="WAIT_FOR_DETECTED_GRACEのタイムアウト秒数(既定15秒)。SCANNINGの"
+        "--scanning-timeoutが切れてもすぐSCAN_FAILEDにせず、モーターを止めた"
+        "状態でこの秒数だけdetected受信を追加で待つ猶予期間(実機/SIM間の"
+        "旋回位置ズレでdetectedが遅れても、この間は静止しているためズレが"
+        "広がらない)。モーター停止中はケーブル巻き込みの制約が無いため"
+        "--scanning-timeoutより長めに設定できる",
+    )
+    parser.add_argument(
         "--publish-confirm-timeout", type=float, default=2.0,
         help="WAIT_FOR_SCAN_START/MARKER_DETECTED/WAIT_FOR_STOP_RELEASE共通の"
         "タイムアウト秒数(既定2秒)。自分のpublishがループバックしてくるのを待つ",
@@ -126,6 +135,7 @@ def main() -> int:
             overall_timeout_sec=args.timeout,
             calibration_timeout_sec=args.calibration_timeout,
             scanning_timeout_sec=args.scanning_timeout,
+            scan_grace_timeout_sec=args.scan_grace_timeout,
             publish_confirm_timeout_sec=args.publish_confirm_timeout,
             hardware_initialize=hardware.initialize,
             starter_is_pushed=starter_is_pushed,
