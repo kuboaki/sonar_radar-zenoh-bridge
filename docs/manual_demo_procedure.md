@@ -139,19 +139,35 @@ starterは常に`--no-starter`のまま(ROS駆動なので、leader/followerど�
 役でも物理starterは使わない)。origin番号も役割に関わらず固定
 (実機=2、SIM=5)。
 
+### 長時間スキャンを試すときの追加パラメータ(2026-08-05)
+
+- **`SCANNING_TIMEOUT`**(`demo_hako_follower.bash`のみ、既定20秒):
+  SIMがleaderのとき、実機のケーブル巻き込み防止に合わせた既定8秒では
+  SIM自身が自分のマーカーを検出しきれないことがある。SIMにはケーブル
+  巻き込みリスクが無いため長めにしてよい。
+- **`TIMEOUT`**(両方のスクリプトで指定可、既定90秒): プロセス全体の
+  タイムアウト。長時間スキャンを試すには90秒はすぐ尽きてしまう。
+  **SIM側・実機側で必ず同じ値を指定すること。** 片方だけ短いと、
+  そちらが先に終了して相手だけ動き続けてしまう(片肺運転になり、
+  相手はいつまでもdetectedが来ずWAIT_FOR_DETECTED_GRACE→SCAN_FAILEDへ
+  落ちるか、そのまま`--timeout`まで空回りすることになる)。
+
+```bash
+# 例: 10分間の長時間スキャンを試す(SIM側・実機側でTIMEOUTを揃える)
+# Mac側
+TIMEOUT=600 SCANNING_TIMEOUT=25 LEADER=1 bash bridge/demo_hako_follower.bash
+# Pi4側
+TIMEOUT=600 bash bridge/demo_real_follower.bash
+```
+
 ## 既知の注意点
 
-- **実機とSIMの旋回速度差**: SIM(leader)の旋回速度・マーカー検出間隔と、
-  実機(follower)のSCANNINGタイムアウト(8秒、ケーブル巻き込み防止のため
-  実機は短め設定)が噛み合わず、実機側が`SCAN_FAILED`になることがある
-  (2026-08-04に実地で確認)。バグではなく、実機・SIM混在構成特有の
-  タイミング課題(メモリの「Follower position-sync design idea」参照、
-  未着手)。`SCAN_FAILED`後は`TERMINATED`まで正常に到達し、モーターは
-  確実に停止する(安全面は問題ない)。
 - **起動順序**: キャリブレーション(手順3・5)自体はマシン間協調が無い
   ローカル処理なので、Mac・Pi4のどちらを先に起動してもよい。ただし
   手順4(`hako-cmd start`)より前にstart系のイベントを送っても、SIM側は
   まだ購読していないので取りこぼす。
+- **`--timeout`はSIM側・実機側で揃える**: 上記「長時間スキャンを試す
+  ときの追加パラメータ」参照。
 - **Pi5のネットワーク**: Wi-Fi/有線LANを同時に外部接続できない環境の
   場合、`ssh ubuntu@192.168.11.4`自体はLAN内なので問題なく使えるが、
   `git pull`等のGitHubアクセスは有線LAN接続時のみ可能(詳細はdevelopment_log
