@@ -18,6 +18,12 @@
 # starterは常に--no-starter(ROS駆動なので、leader/followerどちらでも
 # 物理starterは使わない)。
 #
+# 【2026-08-05の教訓】長時間スキャン(WAIT_FOR_DETECTED_GRACEの動作確認等)
+# を試すには、既定の--timeout(全体のタイムアウト、90秒固定)がすぐ尽きて
+# しまい、SCAN_FAILEDではなく単にプロセス全体がタイムアウトして終わる
+# (最終状態がSCANNINGのままNGになる)。TIMEOUT環境変数で延ばせる:
+#   TIMEOUT=600 bash bridge/demo_real_follower.bash
+#
 # 起動前に必ずcleanup.bashを実行し、旧driver等の残存プロセスが無い
 # 状態から始める(手作業で忘れがちなため、ここで明示的に組み込む)。
 #
@@ -46,8 +52,9 @@ if [ "${LEADER:-0}" = "1" ]; then
   LEADER_FLAG=(--leader)
   ROLE="leader"
 fi
+TIMEOUT="${TIMEOUT:-90}"
 
-echo "=== run_real.py (${ROLE}, origin=2, 実機ハードウェア, --no-starter) ==="
+echo "=== run_real.py (${ROLE}, origin=2, 実機ハードウェア, --no-starter, --timeout=${TIMEOUT}) ==="
 # LEADER_FLAGが空配列のとき、bashのバージョン/ビルドによっては
 # set -u下で"${LEADER_FLAG[@]}"が unbound variable になることがある
 # (Mac同梱のbash 5.3で実際に発生を確認)。${arr[@]+"${arr[@]}"}は
@@ -59,4 +66,4 @@ exec python3 run_real.py \
   --real-radar-base \
   --config ../config/raspi4b/endpoint_zenoh.json \
   --calibration-timeout 60 \
-  --timeout 90
+  --timeout "${TIMEOUT}"

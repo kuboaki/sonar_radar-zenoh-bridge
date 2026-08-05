@@ -21,6 +21,11 @@
 # 長めに設定してよい。SCANNING_TIMEOUT環境変数で上書きできる(既定20秒):
 #   SCANNING_TIMEOUT=25 LEADER=1 bash bridge/demo_hako_follower.bash
 #
+# 長時間スキャンを試すには、既定の--timeout(全体のタイムアウト、90秒固定)
+# もすぐ尽きてしまう(SCAN_FAILEDではなく単にプロセス全体がタイムアウト
+# して終わる)。TIMEOUT環境変数で延ばせる:
+#   TIMEOUT=600 SCANNING_TIMEOUT=25 LEADER=1 bash bridge/demo_hako_follower.bash
+#
 # キャリブレーションはマシン間協調を廃止しローカル完結になったため、
 # 実機とMacの起動順序は自由(以前はキャリブレーション待ち合わせのため
 # 実機を先に起動する必要があったが、その制約は無くなった)。ただし
@@ -60,8 +65,9 @@ if [ "${LEADER:-0}" = "1" ]; then
   ROLE="leader"
 fi
 SCANNING_TIMEOUT="${SCANNING_TIMEOUT:-20}"
+TIMEOUT="${TIMEOUT:-90}"
 
-echo "=== run_hako.py (${ROLE}, origin=5, --no-starter, --scanning-timeout=${SCANNING_TIMEOUT}) ==="
+echo "=== run_hako.py (${ROLE}, origin=5, --no-starter, --scanning-timeout=${SCANNING_TIMEOUT}, --timeout=${TIMEOUT}) ==="
 echo "(plant/ビューアが別ターミナルで起動済みであること。登録完了後、"
 echo " 別ターミナルで hako-cmd start を実行すること)"
 
@@ -76,4 +82,4 @@ exec bash run-hakopy.bash "${SCRIPT_DIR}/run_hako.py" \
   --no-starter \
   --scanning-timeout "${SCANNING_TIMEOUT}" \
   --calibration-timeout 60 \
-  --timeout 90
+  --timeout "${TIMEOUT}"
