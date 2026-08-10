@@ -138,7 +138,13 @@ def run_app(
     with_state_change_reporting(app, _report)
 
     print(
-        f"[{prefix}] origin={origin} leader={is_leader} config={config_path}",
+        f"[{prefix}] origin={origin} leader={is_leader} starter={app.is_starter} config={config_path}",
+        file=sys.stderr,
+    )
+    print(
+        f"[{prefix}] timeouts(sec): overall={overall_timeout_sec} "
+        f"calibration={calibration_timeout_sec} scanning={scanning_timeout_sec} "
+        f"scan_grace={scan_grace_timeout_sec} publish_confirm={publish_confirm_timeout_sec}",
         file=sys.stderr,
     )
 
