@@ -38,7 +38,9 @@ _DEFAULT_CONFIG = os.path.join(_HERE, "..", "config", "mac", "endpoint_zenoh.jso
 _ROBOT = "Radar"
 _SCAN_STRUCT = struct.Struct("<Bidi")  # origin(uint8), angle(int32), dome_angle(float64), distance_mm(int32)
 
-_MAX_DISTANCE_MM = 2000  # 半径軸の上限(障害物が無い場合の値でスケールが崩れないようクリップ)
+_ABS_MAX_DISTANCE_MM = 5000  # 異常値のクリップ上限(実機/シムどちらでもここまでは届かない想定)
+_INITIAL_RMAX_MM = 300  # 半径軸の初期値(実機センサーの有効レンジ50〜300mmに合わせる)
+_RMAX_MARGIN = 1.2  # 観測最大値を超えたら、この倍率で軸を広げる(縮小はしない)
 _COLORS = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
 
 
@@ -73,21 +75,30 @@ def main() -> int:
     fig = plt.figure()
     ax = fig.add_subplot(projection="polar")
     ax.set_theta_zero_location("N")
-    ax.set_rmax(_MAX_DISTANCE_MM)
+    rmax_state = {"value": _INITIAL_RMAX_MM}
+    ax.set_rmax(rmax_state["value"])
     ax.set_title("sonar_radar scan (dome_angle / distance_mm)")
 
     def _update(_frame):
+        rmax_grew = False
         while True:
             try:
                 origin, dome_angle_deg, distance_mm = _q.get_nowait()
             except queue.Empty:
                 break
             s = series.setdefault(origin, {"theta": [], "r": []})
+            clipped = min(distance_mm, _ABS_MAX_DISTANCE_MM)
             s["theta"].append(math.radians(dome_angle_deg))
-            s["r"].append(min(distance_mm, _MAX_DISTANCE_MM))
+            s["r"].append(clipped)
+            if clipped > rmax_state["value"]:
+                rmax_state["value"] = clipped
+                rmax_grew = True
             if len(s["theta"]) > args.max_points:
                 del s["theta"][: len(s["theta"]) - args.max_points]
                 del s["r"][: len(s["r"]) - args.max_points]
+
+        if rmax_grew:
+            ax.set_rmax(rmax_state["value"] * _RMAX_MARGIN)
 
         artists = []
         for i, (origin, s) in enumerate(series.items()):

@@ -273,6 +273,25 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
 観測方法（`watch_state.py`/`watch_all.py`）は「`bridge/`の動作確認（単体、1プロセス自己ループバック）」の節を参照（1台構成でも2台構成でも同じ方法が使え、全origin(マシン)の状態遷移が1つのターミナルに集まる）。
 
+### scanデータのリアルタイム可視化(`plot_scan.py`)
+
+`bridge/plot_scan.py`は`scan`チャンネル(angle/dome_angle/distance_mm)を購読し、`matplotlib`の極座標プロットでリアルタイム表示する。origin毎に別色で表示するため、実機・シムを同時に動かすと1つのウィンドウ上に重ねて表示される。
+
+```bash
+cd ~/Projects/sonar_radar-zenoh-bridge/bridge
+source env.sh
+source ~/Projects/sonar_radar/.venv/bin/activate   # 実機は ../.venv を使う(下記参照)
+python3 plot_scan.py --config ../config/mac/endpoint_zenoh.json   # Macの場合(既定値なので省略可)
+```
+
+**実機(Raspberry Pi)で使う場合の注意点**:
+
+- 実機の`.venv`(`sonar_radar-zenoh-bridge/.venv`、`sonar_radar/.venv`とは別)に`matplotlib`が入っていない場合は`source ../.venv/bin/activate && pip install matplotlib`で追加する。
+- `--config ../config/raspi4b/endpoint_zenoh.json`を明示的に指定すること(既定値はMac向け設定のため)。
+- **SSH経由で実行するとGUIウィンドウは表示されない**(`DISPLAY`が渡らずmatplotlibが非対話バックエンド`agg`にフォールバックし、ウィンドウを開かないまま終了する)。実機のディスプレイに直接出力したい場合は、実機のローカルコンソール(lightdm配下のデスクトップセッション)で実行すること。
+
+**実機とシムを重ねて可視化したい場合**は、実機側でGUI表示させる必要はない。実機は通常通りSSHで`run_real.py`等を動かしたまま、**Mac側で`plot_scan.py`(既定のMac向け設定)を実行するだけで、zenohd経由で実機originのscanもMacの1つのウィンドウに重畳表示される**(実機・Mac双方が同じzenohdに繋がっていれば、追加設定は不要)。実際に実機からのscanをMac側で受信できることを確認済み。
+
 ## 依存リポジトリ
 
 - [sonar_radar](https://github.com/kuboaki/sonar_radar) — 参考にする既存のドメインロジック（キャリブレーション・starter・スキャン）だが、**本リポジトリはこれをimportせず無改造のまま扱う**。過去の設計転回前の変更（`WAIT_FOR_PEER_CALIBRATED`状態、`on_event`/`notify_*()`フック、コミット`038ed15`）はrevert済み（`19eccc5`）。実機での経過時間計測のため、状態遷移ログへの`_clock()`タイムスタンプ出力も追加済み（`74f374b`）
@@ -300,7 +319,7 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 12. [x] 実機/シムのハードウェア抽象層の統一。`libspikehat`/`libspikehat_sim`と同様の「実機・シムで差し替え可能な共通インターフェース」として`bridge/hardware.py`(`RadarHardware`/`RealHardware`/`HakoHardware`)を新設し、`run_real.py`/`run_hako.py`それぞれの個別配線をここに集約した。
 13. [x] `radar_base`の継続旋回(`run()`/`stop()`/`invert_direction()`)と`marker_detector`(`real_marker_detector.py`/`hako_marker_detector.py`)を実装。マイルストーン11の時点では状態機械のロジックのみでドームを物理的に回す配線が漏れていたことが実機確認で発覚し、追加実装した。実機単体・シム単体・実機+シム2台構成(leader/follower入れ替え含む)で、ドームが実際に旋回しマーカーで反転を繰り返すことを目視確認済み。あわせて、ブリッジ経由のオーバーヘッドを踏まえて`scanning_timeout_sec`の既定値を調整し(`--scanning-timeout`で実機/シムそれぞれ個別に上書き可能)、タイムアウト値をクラス属性として状態機械図から名前で参照する設計に統一した(`calibration_timeout_sec`/`scanning_timeout_sec`/`publish_confirm_timeout_sec`)。当初実機8秒/シム12秒と分けたが、followerのタイムアウトがleaderより短いとleaderがまだ正常範囲内でもfollowerが先に見切りをつけてしまう問題が判明し、両者とも8秒に統一した(2026-08-03)。詳細は[`docs/development_log.md`](docs/development_log.md)「マイルストーン5」「マイルストーン6」を参照。
 14. [x] Raspberry Pi 5(`192.168.11.4`、ホスト名`ubuntu-desktop`)を実機・Macと同じネットワークへ接続し、`sonar_radar-zenoh-bridge`をクローン。`config/raspi5/`(`config/raspi4b/`と同形、Zenoh接続先はこのMac`192.168.11.2`)を新設した。`hakoniwa-core-pro`/`hakoniwa-pdu-endpoint`/`hakoniwa-pdu-ros`は以前のセッションで導入・ビルド済みであることを確認済み(汎用サンプル設定のみ残っていたので、sonar_radar向けの設定に置き換えた)。
-15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化。進行中: クラス図・状態機械図は設計済み(`docs/pdu_ros_bridge_ros_zenoh_mapping.md`参照)。`start`/`stop`/`detected`/`state`の標準メッセージ型化、`scan`のangle/dome_angle/origin配線、`--starter`/`--no-starter`、ROS→start/stop注入用のbinding・comm・endpoint設定(`config/raspi5/`)まで完了し、Pi5実機で`ros2 topic pub`からの`start`注入をZenoh側(`watch_all.py`)で受信できることを確認済み(2026-08-03)。あわせて、`hakoniwa_pdu_ros`の`python3 -m`起動が無効化されている不具合を発見し、Pi5でソースにパッチ・再ビルドの上、上流へ[Issue #13](https://github.com/hakoniwalab/hakoniwa-pdu-ros/issues/13)を報告した。distance_mmの実センサー配線と`scan_batch`本体の実装、`sonar_radar`/`sonar_radar_sim`本体との統合実行(実際にROSからstart/stopしてSCANNINGへ遷移することの確認)はまだ。
+15. `pdu_ros_bridge::sonar_radar_ros_bridge`の設計・実装(スキャンデータのROS中継、ROSからのstart/stop注入)、`CALIBRATION_FAILED`/`SCAN_FAILED`の失敗時処理の具体化。進行中: クラス図・状態機械図は設計済み(`docs/pdu_ros_bridge_ros_zenoh_mapping.md`参照)。`start`/`stop`/`detected`/`state`の標準メッセージ型化、`scan`のangle/dome_angle/origin配線、`--starter`/`--no-starter`、ROS→start/stop注入用のbinding・comm・endpoint設定(`config/raspi5/`)まで完了し、Pi5実機で`ros2 topic pub`からの`start`注入をZenoh側(`watch_all.py`)で受信できることを確認済み(2026-08-03)。あわせて、`hakoniwa_pdu_ros`の`python3 -m`起動が無効化されている不具合を発見し、Pi5でソースにパッチ・再ビルドの上、上流へ[Issue #13](https://github.com/hakoniwalab/hakoniwa-pdu-ros/issues/13)を報告した。distance_mmの実センサー配線は実機側(`bridge/real_scanner.py`、`hardware.RealHardware.scanner_get_distance`)で完了済み(2026-08-11)。シム側(`HakoHardware`)はまだダミー値のまま。`scan_batch`本体の実装、`sonar_radar`/`sonar_radar_sim`本体との統合実行(実際にROSからstart/stopしてSCANNINGへ遷移することの確認)はまだ。
 16. クラス図: `sonar_radar`クラスの構成(composition)に`marker_detector`/`scanner`が抜けている(`unit`パッケージには5クラスあるが、`sonar_radar`から実際にcompositionが貼られているのは`radar_base`/`radar_dome`/`starter`の3つのみ)。`pdu_ros_bridge`のクラス図作業時に気づいた既存の抜けで、別途直す。
 
 ## ステータス

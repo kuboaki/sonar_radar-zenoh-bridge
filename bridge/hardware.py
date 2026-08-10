@@ -69,6 +69,15 @@ class RadarHardware(abc.ABC):
     def starter_is_pushed(self) -> bool:
         """starter(フォースセンサー等)が押されているか。starter未使用ならFalse。"""
 
+    def scanner_get_distance(self) -> int:
+        """scanner(距離センサー)の現在値(mm)を返す。既定は未実装のダミー値(0)。
+
+        distance_mmの実センサー配線は実機(RealHardware)のみ対応済み(#16)。
+        シム(HakoHardware)側はまだ未対応のため、既定実装(このメソッド)を
+        オーバーライドせずに使う。
+        """
+        return 0
+
     @abc.abstractmethod
     def close(self) -> None:
         """保持しているハードウェア接続を解放する。"""
@@ -98,6 +107,7 @@ class RealHardware(RadarHardware):
         self._radar_base = None
         self._starter = None
         self._marker_detector = None
+        self._scanner = None
 
     def initialize(self) -> None:
         if self._use_radar_base or self._use_starter:
@@ -107,9 +117,11 @@ class RealHardware(RadarHardware):
         if self._use_radar_base:
             from real_radar_base import RealRadarBase
             from real_marker_detector import RealMarkerDetector
+            from real_scanner import RealScanner
 
             self._radar_base = RealRadarBase(self._hat)
             self._marker_detector = RealMarkerDetector(self._hat)
+            self._scanner = RealScanner(self._hat)
         if self._use_starter:
             from real_starter import RealStarter
 
@@ -155,6 +167,11 @@ class RealHardware(RadarHardware):
         if self._starter is None:
             return False
         return self._starter.is_pushed()
+
+    def scanner_get_distance(self) -> int:
+        if self._scanner is None:
+            return 0
+        return self._scanner.get_distance()
 
     def close(self) -> None:
         if self._hat is not None:

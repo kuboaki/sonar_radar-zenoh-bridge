@@ -31,7 +31,6 @@ from hardware import RealHardware  # noqa: E402
 
 _TICK_INTERVAL_SEC = 0.05
 _OVERALL_TIMEOUT_SEC = 30.0
-_DUMMY_DISTANCE_MM = 500
 
 
 class _FakeStarter:
@@ -140,7 +139,7 @@ def main() -> int:
             hardware_initialize=hardware.initialize,
             starter_is_pushed=starter_is_pushed,
             marker_detector_is_detected=hardware.marker_detector_is_detected,
-            scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
+            scanner_get_distance=hardware.scanner_get_distance,
             radar_base_calibrate=hardware.radar_base_calibrate,
             radar_base_is_calibrated=hardware.radar_base_is_calibrated,
             radar_base_run=hardware.radar_base_run,
