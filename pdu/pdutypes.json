@@ -3,5 +3,6 @@
   { "channel_id": 3, "pdu_size": 28,  "name": "stop",       "type": "std_msgs/Bool" },
   { "channel_id": 4, "pdu_size": 28,  "name": "detected",   "type": "std_msgs/Bool" },
   { "channel_id": 5, "pdu_size": 17,  "name": "scan",       "type": "raw/RadarScan" },
-  { "channel_id": 6, "pdu_size": 152, "name": "state",      "type": "std_msgs/String" }
+  { "channel_id": 6, "pdu_size": 152, "name": "state",      "type": "std_msgs/String" },
+  { "channel_id": 7, "pdu_size": 764, "name": "scan_batch", "type": "sensor_msgs/PointCloud" }
 ]

@@ -472,3 +472,35 @@ Astah MCPでクラス図(`sonar_radar_zenoh_bridgeのクラス図`)を確認し�
 22. **「ほとんど同じコード」は、大抵「本当は同じであるべきコード」である。** `RealScanner`/`HakoScanner`の重複は、フィルタリングロジックの単純なコピペではなく、そもそも実機/SIMで同じインターフェース(`distance_read`等)を持つよう設計された`libspikehat`/`libspikehat_hako`の存在を踏まえれば、統合可能というシグナルだった。重複コードを見つけたら、単に共通関数に切り出すだけでなく、「そもそもクラス自体を統合できないか」を検討する価値がある。
 
 23. **実機専用のネイティブライブラリへの依存は、定数1つであっても波及しうる。** `spikehat.DEVICE_DISTANCE`という単純な整数定数を得るためだけに`spikehat`モジュール全体をimportすると、そのモジュールのグローバルスコップの副作用(`ctypes.CDLL`によるライブラリロード)まで引き継いでしまう。値だけが必要な場合は、重い依存を持つモジュールから独立した定数モジュールに複製する、という選択肢が有効。
+
+## マイルストーン9: scan_batch(実機/SIM 2台分のスキャンをROS経由でブラウザに重畳表示)を実装(完了)
+
+### 経緯
+
+ユニット層統合(マイルストーン8)の完了後、ユーザーから「ROS側で実機(Pi4)とSIM(Mac)の2つのレーダーからのデータを収集・表示する」という要望が出た。当初rvizでの表示を想定していたが、ユーザーの実際の意図はmatplotlibでの重畳表示であり、かつ表示は「ROS側」の役割(sonar_radar/sonar_radar_sim自体の役割ではない)という理解の確認を経て、既存の`docs/pdu_ros_bridge_ros_zenoh_mapping.md`とAstahクラス図・状態機械図に既に設計されていた`pdu_ros_bridge::sonar_radar_ros_bridge`(Zenoh専用・rclpy非依存のPi5常駐プロセス、scanを`scan_batch_size`件たまるかstop受信時にまとめて`scan_batch`としてpublishする設計)を実装する方針で合意した。
+
+既存設計は`angle`/`distance_mm`のみでorigin(実機/SIM区別)を含んでいなかったため、Astah図(`publish_scan_batch()`の操作定義)と`docs/pdu_ros_bridge_ros_zenoh_mapping.md`を先に更新し、`channels[2]="origin"`を追加する拡張を合意の上で行った(diagram-firstの方針通り、コードより先に図を更新)。表示クライアントはPi5にGUIが無い(DISPLAY未設定)ため、matplotlibのWebAggバックエンドで「Pi5自身での表示」「別ノードでの表示」「ブラウザ表示」を1実装で満たす方針とした。
+
+### 実施内容
+
+- `bridge/broker.py`: `ScanSample`(NamedTuple)、`Broker.__init__(..., *, consume_scan: bool = False)`(既定False、opt-in)、`consume_scan_received()`(FIFOキューから1件pop)、`publish_scan_batch()`(`sensor_msgs/PointCloud`、channels=angle/distance_mm/origin)を追加。既定Falseのため既存の`SonarRadarApp`用Brokerは無変更・無影響(実測確認済み)。
+- `pdu/pdutypes.json`に`scan_batch`(channel_id 7, pdu_size 764, `sensor_msgs/PointCloud`)を追加。`pdu_size`はhakoniwa_pduの実際のバイナリレイアウト(24byteメタ+152byte固定部+可変長heap)から計算し、`py_to_pdu_PointCloud()`の実測バイト長(0/1/15件でそれぞれ584/596/764byte)で検証済み。
+- `bridge/sonar_radar_ros_bridge.py`(新設): Astahの状態機械(INIT→RUNNING→ACCUMULATING_SCAN/FLUSHING_SCAN、終了状態なし)を1:1翻訳。フェイクBrokerによる状態遷移の単体テストで、蓄積・flush・stop時の端数flushの挙動を確認済み。
+- Pi5側: `config/raspi5/ros_bindings_scan_batch.json`(`direction: "pdu_to_ros"`)、`comm/zenoh_ros_scan_batch_comm.json`(`hakoniwa_pdu_ros.gen_zenoh_io`で生成)、`run_ros_bridge_scan_batch.bash`を新設。
+- `ros/scan_batch_viewer.py`(新設): rclpy + matplotlib WebAggバックエンドで`/pdu/sonar_radar/scan_batch`を極座標表示。`bridge/`ではなく`ros/`に配置し、`bridge/broker.py`が明言する「Zenoh専用・rclpy非依存」という不変条件を保った。
+
+### 発見した2つの問題と対応
+
+1. **ROSトピック名は指定と異なり`/pdu/`配下になる**: `hakoniwa_pdu_ros`は`direction: "pdu_to_ros"`のbindingを常に`/pdu`名前空間の下へマッピングする仕様(`/pdu`はPDU由来トピック専用の予約領域)。bindingの`topic`指定に関わらず実際のトピック名は`/pdu/sonar_radar/scan_batch`になる。ドキュメントとビューアのデフォルト値を修正して対応。
+
+2. **`hakoniwa_pdu_ros`のネストしたリスト型フィールドでクラッシュ(上流バグ、ローカルパッチで解消)**: `type_mapper.py`の`_list_item_type()`は要素型を`__annotations__`から解決しようとするが、rclpy生成クラス(`sensor_msgs/PointCloud`等)は`__annotations__`が空(型情報は`get_fields_and_field_types()`側にのみ`"sequence<pkg/Msg>"`形式で入っている)。解決失敗時に`src_item.__class__()`(hakoniwa_pdu側の型、ROS側の型ではない)へフォールバックしてしまい、rclpyのC変換層で`AssertionError`が起きてブリッジプロセスがクラッシュしていた。`_list_item_type()`に`get_fields_and_field_types()`ベースのフォールバック解決を追加し、Pi5の`hakoniwa-pdu-ros`ソースにローカルパッチ・`colcon build`で再ビルドして解消(詳細は`docs/pdu_ros_bridge_ros_zenoh_mapping.md`「scan_batchのROS中継」参照)。
+
+### 動作確認(2026-08-11)
+
+Mac上で`Broker.publish_scan()`をorigin=1(実機を模擬)・origin=2(SIMを模擬)交互に発行する合成データで、Pi5の`sonar_radar_ros_bridge.py`→`hakoniwa_pdu_ros`ブリッジ→`/pdu/sonar_radar/scan_batch`→`ros/scan_batch_viewer.py`(WebAgg、HTTP 200確認)までの全経路を通し、`ros2 topic echo`でchannels(angle/distance_mm/origin)がoriginごとに正しく区別された値で届くことを確認した。実機Pi4を使わない合成データでの検証であり、実機+SIM実データでの通し確認・ブラウザでの目視確認はユーザーが行う。
+
+### 得られた教訓
+
+24. **「型が存在する」ことと「変換パイプラインがその型を正しく扱える」ことは別の確認事項である。** `sensor_msgs/PointCloud`型自体がROS2 Jazzyに存在することは実装前に確認していたが、`hakoniwa_pdu_ros`の汎用変換コードがネストしたリスト型フィールドを正しく扱えるかは、実際に流してみるまで分からなかった。静的な存在確認と実地の疎通確認は別物として扱う必要がある。
+
+25. **設定ファイルの「指定した値」と「実際に反映される値」が異なることがある。** `ros_bindings_scan_batch.json`の`topic`に`/sonar_radar/scan_batch`と指定しても、`direction: "pdu_to_ros"`の場合は実装側の仕様で強制的に`/pdu`配下へ変換される。ライブラリの挙動は、ソースコード(`config_loader.py`)を読むか実地確認するまで、ドキュメント上の見た目通りとは限らない。

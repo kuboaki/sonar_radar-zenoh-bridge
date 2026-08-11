@@ -30,9 +30,10 @@
 - `points[]`: 空リスト。`points`と`channels[].values`の件数一致はrviz等の可視化ツールが期待する慣習であって、`PointCloud`メッセージ自体(および`hakoniwa_pdu`の変換コード)が構造的に要求するものではないため、ダミー値で埋める必要はない。
 - `channels[0]`: `name="angle"`, `values=[各サンプルの角度]`
 - `channels[1]`: `name="distance_mm"`, `values=[各サンプルの距離(mm)]`
+- `channels[2]`: `name="origin"`, `values=[各サンプルのorigin]`(2026-08-11追加。実機/SIM複数台のデータを1トピックで重畳表示できるよう、既存の`scan`と同じく送信元をoriginで区別する。`robot_name`はプロジェクト全体で`"Radar"`固定・静的なのに対しoriginは起動時`--origin`で渡す動的な値のため、origin毎に別トピックを用意せず単一トピック+`channels`に埋め込む方式を採用した)
 - `header.stamp`: バッチ送出時刻。移動体追跡は今回のスコープ外とし、精度は重視しない(参考情報)。
 
-収集した角度・距離のペアがすべて`channels`にそのまま残るため、データの欠落は無い。実際の可視化(直交座標への変換、プロット)は受信側の仕事とする。
+収集した角度・距離・originの組がすべて`channels`にそのまま残るため、データの欠落は無い。実際の可視化(直交座標への変換、origin別のプロット)は受信側の仕事とする。
 
 ## 前提となる未実装ギャップ(要対応)
 
@@ -88,3 +89,13 @@ distance_mmの実センサー配線とscan_batchの実装は保留し、まず�
    中身は`ros2 topic pub --once /sonar_radar/start_cmd std_msgs/msg/Bool "{data: true}"`等をラップしただけ。`set -u`は使っていない(`/opt/ros/jazzy/setup.bash`が未定義変数を参照するため、strict mode下だと落ちる)。
 
 **動作確認(2026-08-04)**: Mac(SIM、`run_hako.py`)を相手に、`run_ros_bridge.bash`→`demo_ros_start.bash`→(WAIT_FOR_START_PRESS→SCANNING→マーカー検出/反転を確認)→`demo_ros_stop.bash`→TERMINATEDまで、ブリッジをクラッシュさせずに完走することを確認済み。実機(Pi4)側でも2026-08-03に同じ流れ(SCANNING到達)を確認済みだが、stopまでの完走はSIM側でのみ確認(実機は機材移動のため未実施)。
+
+## scan_batchのROS中継(Pi5、2026-08-11実装・動作確認済み)
+
+`bridge/sonar_radar_ros_bridge.py`(scanを蓄積してscan_batchとしてpublishするZenoh専用プロセス、`docs/sonar_radar_zenoh_bridge.asta`の`pdu_ros_bridge::sonar_radar_ros_bridge`参照)が送出する`scan_batch`(`sensor_msgs/PointCloud`)を、`config/raspi5/ros_bindings_scan_batch.json`(`direction: "pdu_to_ros"`)経由でROSトピックへ中継する。
+
+**実際のトピック名は`/pdu/sonar_radar/scan_batch`になる**(bindingの`topic`指定に関わらず)。`hakoniwa_pdu_ros`は`direction: "pdu_to_ros"`のbindingを常に`/pdu`名前空間の下へマッピングする仕様(`/pdu`はPDU由来トピック専用の予約領域、`config_loader.py`の`_topic_for_direction()`/`_validate_ros_topic()`参照)。`ros_to_pdu`方向(start/stop等)にはこのプレフィックスは付かない。
+
+**既知の不具合(2026-08-11発見・ローカルパッチで解消済み)**: `hakoniwa_pdu_ros`の`type_mapper.py`の`_list_item_type()`は、ネストしたリストフィールド(`sensor_msgs/PointCloud`の`channels: List[ChannelFloat32]`等)の要素型を`dst_parent.__class__.__annotations__`から解決しようとするが、rclpy生成クラスは`__annotations__`が空(型情報は`get_fields_and_field_types()`側にのみ`"sequence<pkg/Msg>"`形式で入っている)。そのため要素型の解決に失敗し、`_copy_list()`が`src_item.__class__()`(hakoniwa_pdu側の`pdu_pytype`クラス、ROS側の型ではない)にフォールバックしてしまい、rclpyのC変換層(`sensor_msgs__msg__channel_float32__convert_from_py`)で`AssertionError`が起きてブリッジプロセスがクラッシュする。`_list_item_type()`に`get_fields_and_field_types()`ベースのフォールバック解決(`"sequence<pkg/Msg>"`から`import_ros_msg_class()`で正しいROS型を解決)を追加し、Pi5の`~/Projects/hakoniwa-pdu-ros/hakoniwa_pdu_ros/type_mapper.py`にローカルパッチ・`colcon build --packages-select hakoniwa_pdu_ros`で再ビルド済み。単純な`float32[]`等のフィールドしか使わない既存のstart/stop/state/scanは影響を受けない(この不具合はネストしたカスタム型リストを持つメッセージ型でのみ発生する)。
+
+**動作確認(2026-08-11)**: Mac上で`bridge.Broker.publish_scan()`をorigin=1(実機を模擬)・origin=2(SIM を模擬)交互に20回ずつ呼ぶ合成データで、`sonar_radar_ros_bridge.py`(Pi5)がscan_batch_size(既定15)件毎に正しくFLUSHING_SCANへ遷移してpublish_scan_batch()を呼び、`ros2 topic echo /pdu/sonar_radar/scan_batch`で`channels`(angle/distance_mm/origin)がoriginごとに正しく区別された値で届くことを確認済み(実機Pi4を使わない合成データでの検証、実機+SIM実データでの通し確認は未実施)。

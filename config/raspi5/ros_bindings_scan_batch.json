@@ -1,0 +1,10 @@
+{
+  "endpoint_config": "endpoint_zenoh_ros_scan_batch.json",
+  "bindings": [
+    {
+      "pdu_key": { "robot_name": "Radar", "pdu_name": "scan_batch" },
+      "topic": "/sonar_radar/scan_batch",
+      "direction": "pdu_to_ros"
+    }
+  ]
+}
