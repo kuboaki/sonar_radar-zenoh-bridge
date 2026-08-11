@@ -1,7 +1,8 @@
 """real_hat — 実機libspikehatのSpikeHatを構築する共通ヘルパー。
 
-real_radar_base.RealRadarBase と real_starter.RealStarter は、どちらも
-同じBuild HATに対する単一のシリアル接続(spikehat.SpikeHat())を共有する
+radar_base.RadarBase と starter.Starter(実機/SIM共通のunitクラス、
+2026-08-11にRealRadarBase/RealStarter等から統合)は、どちらも同じ
+Build HATに対する単一のシリアル接続(spikehat.SpikeHat())を共有する
 必要がある(Build HATは複数の同時オープンをサポートしないため)。
 
 以前は両クラスが独立にspikehat.SpikeHat()を構築しており、
@@ -48,7 +49,7 @@ def _load_buildhat_firmware() -> None:
 
 
 def create_real_hat():
-    """spikehat.SpikeHat()を構築して返す。RealRadarBase/RealStarterで共有する。"""
+    """spikehat.SpikeHat()を構築して返す。radar_base.RadarBase/starter.Starterで共有する。"""
     _load_buildhat_firmware()
     lib_dir = _resolve_libspikehat_python_dir()
     if lib_dir not in sys.path:

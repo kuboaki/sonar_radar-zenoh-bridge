@@ -1,10 +1,13 @@
 """hardware — 実機/シムのハードウェアアクセスを差し替え可能にする共通インターフェース。
 
-libspikehat/libspikehat_sim が sonar_radar 本体向けに提供している
-「同じヘッダ(libspikehat.h)に対する実機/シムの2実装」というパターンを、
-sonar_radar-zenoh-bridge の呼び出し側スクリプト(run_real.py/run_hako.py)
-のハードウェア配線にも適用したもの。RadarHardware が libspikehat.h に
-相当する契約で、RealHardware/HakoHardware がその実機/シム実装にあたる。
+クラス図(sonar_radar_zenoh_bridgeのクラス図)の設計意図通り、
+sonar_radar::unit層(radar_base/marker_detector/scanner/starter)は
+実機/SIMで単一クラスを共有する(radar_base.py/marker_detector.py/
+scanner.py/starter.py参照)。実機/SIMの違いは、hatオブジェクト
+(spikehat.SpikeHat vs libspikehat_hako.HakoSpikeHat)の実装差だけに
+閉じ込める。RadarHardwareはこれらunitクラス群をどう構築・束縛するか
+という契約で、RealHardware/HakoHardwareは「どのhatを使うか」「どの
+ユニットを使うか(use_radar_base/use_starter)」という配線だけが異なる。
 
 SonarRadarApp自体は今まで通り、hardware_initialize/radar_base_calibrate/
 radar_base_is_calibrated/starter_is_pushedを4つの独立したコールバックと
@@ -70,11 +73,8 @@ class RadarHardware(abc.ABC):
         """starter(フォースセンサー等)が押されているか。starter未使用ならFalse。"""
 
     def scanner_get_distance(self) -> int:
-        """scanner(距離センサー)の現在値(mm)を返す。既定は未実装のダミー値(0)。
-
-        distance_mmの実センサー配線は実機(RealHardware)のみ対応済み(#16)。
-        シム(HakoHardware)側はまだ未対応のため、既定実装(このメソッド)を
-        オーバーライドせずに使う。
+        """scanner(距離センサー)の現在値(mm)を返す。既定は未接続時のダミー値(0)
+        (RealHardware/HakoHardwareとも、scanner未構築時はこの既定実装を使う)。
         """
         return 0
 
@@ -87,9 +87,9 @@ class RealHardware(RadarHardware):
     """実機のハードウェアアクセス(libspikehat経由)。
 
     Build HATのファームウェアロードはinitialize()内で行う(SonarRadarAppの
-    INITのentry、broker.open()より後)。RealRadarBase/RealStarter/
-    RealMarkerDetectorは、Build HATへの同じシリアル接続(hat)を共有する
-    必要があるため、real_hat.create_real_hat()で1つだけ構築して渡す
+    INITのentry、broker.open()より後)。RadarBase/Starter/MarkerDetectorは、
+    Build HATへの同じシリアル接続(hat)を共有する必要があるため、
+    real_hat.create_real_hat()で1つだけ構築して渡す
     (real_hat.pyのモジュールdocstring参照)。
 
     marker_detectorはradar_baseと同じ物理ドームに載っているため、
@@ -115,17 +115,17 @@ class RealHardware(RadarHardware):
 
             self._hat = create_real_hat()
         if self._use_radar_base:
-            from real_radar_base import RealRadarBase
-            from real_marker_detector import RealMarkerDetector
-            from real_scanner import RealScanner
+            from radar_base import RadarBase
+            from marker_detector import MarkerDetector
+            from scanner import Scanner
 
-            self._radar_base = RealRadarBase(self._hat)
-            self._marker_detector = RealMarkerDetector(self._hat)
-            self._scanner = RealScanner(self._hat)
+            self._radar_base = RadarBase(self._hat)
+            self._marker_detector = MarkerDetector(self._hat)
+            self._scanner = Scanner(self._hat)
         if self._use_starter:
-            from real_starter import RealStarter
+            from starter import Starter
 
-            self._starter = RealStarter(self._hat)
+            self._starter = Starter(self._hat)
 
     def radar_base_calibrate(self) -> None:
         if self._radar_base is not None:
@@ -184,11 +184,11 @@ class HakoHardware(RadarHardware):
     hako_hat(HakoSpikeHat)自体はhakopyのasset登録に必要なため、
     呼び出し側(run_hako.py)がinitialize()より前に構築して渡す
     (この構築だけはSonarRadarAppのINITタイミングに合わせられない、
-    hakopyフレームワーク側の制約)。HakoRadarBase/HakoStarter/
-    HakoMarkerDetectorの構築は軽量・即時のため、実機のような遅延の
-    必要は無いが、対称性のためinitialize()内で行う。marker_detectorは
-    radar_baseと同じく常に構築する(実機のuse_radar_baseフラグに相当する
-    ものは無く、シムのradar_baseは既定で常に有効なため)。
+    hakopyフレームワーク側の制約)。RadarBase/Starter/MarkerDetectorの
+    構築は軽量・即時のため、実機のような遅延の必要は無いが、対称性の
+    ためinitialize()内で行う。marker_detectorはradar_baseと同じく常に
+    構築する(実機のuse_radar_baseフラグに相当するものは無く、シムの
+    radar_baseは既定で常に有効なため)。
     """
 
     def __init__(self, hako_hat, use_starter: bool) -> None:
@@ -197,17 +197,20 @@ class HakoHardware(RadarHardware):
         self._radar_base = None
         self._starter = None
         self._marker_detector = None
+        self._scanner = None
 
     def initialize(self) -> None:
-        from hako_radar_base import HakoRadarBase
-        from hako_marker_detector import HakoMarkerDetector
+        from radar_base import RadarBase
+        from marker_detector import MarkerDetector
+        from scanner import Scanner
 
-        self._radar_base = HakoRadarBase(self._hako_hat)
-        self._marker_detector = HakoMarkerDetector(self._hako_hat)
+        self._radar_base = RadarBase(self._hako_hat)
+        self._marker_detector = MarkerDetector(self._hako_hat)
+        self._scanner = Scanner(self._hako_hat)
         if self._use_starter:
-            from hako_starter import HakoStarter
+            from starter import Starter
 
-            self._starter = HakoStarter(self._hako_hat)
+            self._starter = Starter(self._hako_hat)
 
     def radar_base_calibrate(self) -> None:
         self._radar_base.calibrate()
@@ -237,6 +240,11 @@ class HakoHardware(RadarHardware):
         if self._starter is None:
             return False
         return self._starter.is_pushed()
+
+    def scanner_get_distance(self) -> int:
+        if self._scanner is None:
+            return 0
+        return self._scanner.get_distance()
 
     def close(self) -> None:
         pass  # hako_hatのライフサイクルは呼び出し側(hakopy asset)が持つ

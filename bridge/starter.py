@@ -1,26 +1,37 @@
-"""real_starter — 実機libspikehatのstarter(force sensor)を使う実装。
+"""starter — sonar_radar::unit::starter に相当する、実機/SIM共通のユニット実装。
 
-Build HATは複数の同時オープンをサポートしないため、spikehat.SpikeHat()の
-構築はreal_hat.create_real_hat()に一本化し、real_radar_base.RealRadarBase
-と共有する(呼び出し側がhatを1つだけ作って両方に渡す)。
+クラス図の設計意図通り、実機とSIMで別クラスに分けず単一のクラスを共有する。
+実機/SIMの違いは、コンストラクタで渡すhatオブジェクト(実機はreal_hat.create_real_hat()
+が返すspikehat.SpikeHat、SIMはlibspikehat_hako.HakoSpikeHat)の実装差だけに
+閉じ込める(scanner.py/radar_base.py/marker_detector.pyと同じ設計)。
 
 Build HATには「準備完了か」を問い合わせるソフトウェアAPIが無く、実機の
 LED(赤→消灯、緑点灯)を目視するしかない。自動テストで人手を介さずに
 待てるよう、コンストラクタ内で実際にforce_is_pressed()が例外を出さずに
 読めるようになるまでポーリングして待つ(is_pushed()が返すようになって
 初めて「準備完了」とみなす、というソフトウェアだけで完結する代替手段)。
+SIM(HakoSpikeHat)側のforce_is_pressed()は例外を投げない設計のため、この
+待機ループは初回呼び出しで即座に完了する(実質的な遅延は生じない)。
+
+plantのビューア(sonar_radar_viewer.py)でSpaceキーを押した場合も、plant側
+がその押下リクエストをMuJoCoのpress_ctrlへ適用し、結果としてforce_sensor
+PDUの値が変わる。つまりこのクラスからは、人間がビューアで操作したのか、
+HakoSpikeHat.schedule_auto_press()で自動注入したのかを区別しない
+(実機の物理ボタンと同じ扱い)。
 """
 
 from __future__ import annotations
 
 import time
 
+from device_types import DEVICE_FORCE
 
-class RealStarter:
-    """実機のstarter(フォースセンサー)を読む。sonar_radar::unit::starterに相当。
 
-    hatはreal_hat.create_real_hat()で構築したspikehat.SpikeHat()を渡す
-    (real_radar_base.RealRadarBaseと同じhatを共有する想定)。
+class Starter:
+    """starter(フォースセンサー)を読む。sonar_radar::unit::starterに相当。実機/SIM共通実装。
+
+    hatは実機ならreal_hat.create_real_hat()、SIM(Hakoniwa plant経由)なら
+    libspikehat_hako.HakoSpikeHatのインスタンスを渡す。
     """
 
     def __init__(
@@ -32,11 +43,9 @@ class RealStarter:
     ) -> None:
         self._port = port
         self._hat = hat
-        import spikehat  # real_hat.create_real_hat()でパス解決済みの前提
-
-        self._hat.port_config(self._port, spikehat.DEVICE_FORCE)
+        self._hat.port_config(self._port, DEVICE_FORCE)
         self._wait_until_ready(ready_timeout_sec, ready_poll_interval_sec)
-        print(f"[real_starter] 実機のstarter(force sensor, port={self._port})を初期化しました")
+        print(f"[starter] starter(force sensor, port={self._port})を初期化しました")
 
     def _wait_until_ready(self, timeout_sec: float, poll_interval_sec: float) -> None:
         """force_is_pressed()が例外を出さずに読めるようになるまで待つ。

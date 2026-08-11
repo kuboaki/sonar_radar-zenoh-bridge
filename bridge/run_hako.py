@@ -6,7 +6,8 @@
 hakopy controllerとして登録し、Hakoniwa plant(sonar_radar_hako.py、
 別プロセス、無改造)経由のMuJoCoで確認する。
 
-radar_baseは常にHakoRadarBase(Hakoniwa PDU経由でモーターを駆動)。
+radar_baseは常にradar_base.RadarBase(実機/SIM共通のunitクラス、Hakoniwa
+PDU経由でモーターを駆動)。
 starterは既定ではスタブ(followerはstarter操作なしでstart受信のみで
 SCANNINGへ進む設計のため、これが最も典型的な使い方)。--hako-starter を
 指定するとplantのforce_sensor PDU(ビューアのSpaceキー操作も含む)を読む。
@@ -70,7 +71,6 @@ if not PDU_DEF_PATH or not os.path.exists(PDU_DEF_PATH):
 STEP_USEC = 1000
 _TICK_INTERVAL_SEC = 0.05
 _OVERALL_TIMEOUT_SEC = 30.0
-_DUMMY_DISTANCE_MM = 500
 
 
 def main() -> None:
@@ -168,7 +168,7 @@ def main() -> None:
             hardware_initialize=hardware.initialize,
             starter_is_pushed=hardware.starter_is_pushed,
             marker_detector_is_detected=hardware.marker_detector_is_detected,
-            scanner_get_distance=lambda: _DUMMY_DISTANCE_MM,
+            scanner_get_distance=hardware.scanner_get_distance,
             radar_base_calibrate=hardware.radar_base_calibrate,
             radar_base_is_calibrated=hardware.radar_base_is_calibrated,
             radar_base_run=hardware.radar_base_run,

@@ -79,15 +79,20 @@ sonar_radar-zenoh-bridge/
 ├── bridge/                    # 新設計に基づく実装(状態機械図を1状態ずつ実装しながら進める)
 │   ├── spikehat_timer.py      # ワンショットタイマー(C移植を見据えた関数シグネチャ)
 │   ├── broker.py              # PDU publish/受信を担う抽象層(hakoniwa_pdu_endpoint.Endpointのラップ)
-│   ├── sonar_radar_app.py     # ステートマシン本体。INIT〜SCANNING(到達まで)を実装済み
+│   ├── sonar_radar_app.py     # ステートマシン本体
 │   ├── app_runner.py          # SonarRadarAppの構築・tickループ・state reportingの共通部分
-│   ├── real_hat.py            # 実機libspikehatのSpikeHat()構築(RealRadarBase/RealStarterで共有)
-│   ├── real_radar_base.py     # radar_base(旋回モーター)の実機実装(RealRadarBase)
-│   ├── real_starter.py        # starter(フォースセンサー)の実機実装(RealStarter)
-│   ├── hako_radar_base.py     # radar_baseのHakoniwa PDU実装(HakoRadarBase、MuJoCo plant経由)
-│   ├── hako_starter.py        # starterのHakoniwa PDU実装(HakoStarter、MuJoCo plant経由)
+│   ├── hardware.py            # 実機/SIMの配線層(RadarHardware契約、RealHardware/HakoHardware)
+│   ├── device_types.py        # libspikehatのポートデバイスタイプ定数(実機spikehatモジュールに非依存)
+│   ├── radar_base.py          # sonar_radar::unit::radar_base(旋回モーター)。実機/SIM共通の単一クラス
+│   ├── marker_detector.py     # sonar_radar::unit::marker_detector(色センサー)。実機/SIM共通の単一クラス
+│   ├── scanner.py             # sonar_radar::unit::scanner(距離センサー)。実機/SIM共通の単一クラス
+│   ├── starter.py             # sonar_radar::unit::starter(フォースセンサー)。実機/SIM共通の単一クラス
+│   ├── real_hat.py            # 実機libspikehatのSpikeHat()構築(radar_base/starterで共有)
 │   ├── run_real.py            # 実機での動作確認エントリポイント(app_runnerを使用)
-│   └── run_hako.py            # MuJoCo(Hakoniwa plant)経由の動作確認エントリポイント(hakopy controller)
+│   ├── run_hako.py            # MuJoCo(Hakoniwa plant)経由の動作確認エントリポイント(hakopy controller)
+│   ├── plot_scan.py           # scanチャンネルをリアルタイムに極座標プロットする可視化ツール
+│   └── watch_state.py / watch_all.py / console_report.py / state_reporter.py
+│                               # 状態遷移・生メッセージの観測ツール群
 └── driver/
     └── sonar_radar_zenoh.py   # 【旧, 使わない】sonar_radar の SonarRadarSM を import して
                                  # on_event/notify_*() で配線する転回前の実装。bridge/ に

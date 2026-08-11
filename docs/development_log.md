@@ -440,3 +440,35 @@ CPU負荷が高い状態でシムを動かすと、`scanning_timeout_sec`の判�
 19. **「旋回を止めずに待つ猶予」は実質的にタイムアウトの延長にすぎない。** GRACE状態(follower用)を模してleader用にも旋回継続の猶予状態を追加する案を検討したが、ユーザーから「事実上タイムアウト時間の延長と同じ」との指摘を受け、状態機械を複雑にせず単純にタイムアウト値を見直す対応に落ち着いた。安全機構としての振る舞いが同じなら、シンプルな実装を優先すべきという教訓。
 
 20. **ビルド成果物を直接編集するのは、ソースを更新しない限り技術的負債になる。** MuJoCo XMLはStudio(.io)からBlender経由で生成される成果物だが、今回は緊急性を優先しXML側を直接編集した。ユーザーから「ライブラリにパッチしてソースコードは直さないのと同じ」との指摘があった通り、正式にはソース(Studio .io)側も更新し、ビルドパイプラインを通して整合性を保つ必要がある。
+
+## マイルストーン8: unit層(radar_base/marker_detector/scanner/starter)を実機/SIMで単一クラスに統合(完了)
+
+### 経緯
+
+マイルストーン7でSIM側の`scanner_get_distance`が固定値500mmのままだったことに気づき、`HakoScanner`を新設しようとしたところ、ユーザーから「libspikehatとlibspikehat_simがあるので、ほとんど違いはないと思う」「もっといえば、Scannerクラスは同じではないかと」との指摘があった。
+
+Astah MCPでクラス図(`sonar_radar_zenoh_bridgeのクラス図`)を確認した結果、`sonar_radar::unit`層(`radar_base`/`marker_detector`/`scanner`/`starter`)は当初から**単一クラス**として設計されており、実機/SIMの違いは下位の`libspikehat`層(実機用`libspikehat`、SIM用`libspikehat_sim`、インターフェースはlibspikehat.hと同一)だけに閉じ込める、という設計意図が明確だった。ユーザーの原則として「（パラメータや依存する下位ライブラリの差し替えを除き）ユニット層が同じであることは当初の設計が示しているもの」との確認を得た。
+
+しかし`sonar_radar-zenoh-bridge`の`bridge/`層は、`RealRadarBase`/`HakoRadarBase`のように実機用・SIM用で別々のクラスに分かれてしまっており、当初の設計から逸脱していた。
+
+### 技術的な壁と対応
+
+実機用`spikehat.py`はモジュールレベルで`ctypes.CDLL()`により実機専用の共有ライブラリ(`libspikehat.so`)をロードするため、SIM実行環境で`import spikehat`するとロードに失敗しうる。`RealRadarBase`等がデバイスタイプ定数(`spikehat.DEVICE_MOTOR_L`等)を得るためだけに`spikehat`モジュール全体をimportしていたことが、単一クラス化の技術的な障壁だった。
+
+対応として、デバイスタイプ定数を`spikehat`モジュールから独立させた`bridge/device_types.py`を新設し、`sonar_radar::unit`層の各クラスはこれだけを参照するようにした。値は実機用`spikehat.py`・SIM用`libspikehat_sim`双方の定数と完全に一致することを確認済み(`DEVICE_NONE=0, DEVICE_MOTOR_M=1, DEVICE_MOTOR_L=2, DEVICE_COLOR=3, DEVICE_DISTANCE=4, DEVICE_FORCE=5`)。また`HakoSpikeHat.port_config()`は`return 0`のno-op実装であることを確認し、実機/SIM問わず無条件で`hat.port_config(port, device_type)`を呼び出せることも確認した。
+
+### 実施内容
+
+- `bridge/scanner.py`(`Scanner`)、`bridge/radar_base.py`(`RadarBase`)、`bridge/marker_detector.py`(`MarkerDetector`)、`bridge/starter.py`(`Starter`)を新設。いずれもコンストラクタで`hat`(実機なら`real_hat.create_real_hat()`が返す`spikehat.SpikeHat`、SIMなら`libspikehat_hako.HakoSpikeHat`)を受け取るだけの単一クラス。
+- `hardware.py`の`RealHardware`/`HakoHardware`両方から、これら統合クラスを使うよう変更。
+- 旧`real_radar_base.py`/`hako_radar_base.py`/`real_marker_detector.py`/`hako_marker_detector.py`/`real_starter.py`/`hako_starter.py`(計6ファイル)を削除。
+- 実機・SIM双方で`demo_real_leader.bash`/`demo_hako_leader.bash`を実地実行し、全4ユニットの初期化ログとSCANNING→MARKER_DETECTEDサイクルが正常に動作することを確認済み。
+- `HakoHardware`が`Scanner`を使うようになったことで、SIM側の`scanner_get_distance`もダミー値500mm固定から脱し、実際のMuJoCo距離センサー値を返すようになった(元々のきっかけの問題も解消)。
+
+### 得られた教訓
+
+21. **クラス図は「今どう実装されているか」ではなく「本来どう設計すべきか」の参照点になる。** 実装が積み重なるうちにクラス図の意図(unit層の実機/SIM共有)から逸脱していたが、ユーザーの指摘を受けてクラス図を読み直すことで、当初の設計原則を正確に思い出せた。実装のレビューに迷ったら、まずクラス図に立ち返るとよい。
+
+22. **「ほとんど同じコード」は、大抵「本当は同じであるべきコード」である。** `RealScanner`/`HakoScanner`の重複は、フィルタリングロジックの単純なコピペではなく、そもそも実機/SIMで同じインターフェース(`distance_read`等)を持つよう設計された`libspikehat`/`libspikehat_hako`の存在を踏まえれば、統合可能というシグナルだった。重複コードを見つけたら、単に共通関数に切り出すだけでなく、「そもそもクラス自体を統合できないか」を検討する価値がある。
+
+23. **実機専用のネイティブライブラリへの依存は、定数1つであっても波及しうる。** `spikehat.DEVICE_DISTANCE`という単純な整数定数を得るためだけに`spikehat`モジュール全体をimportすると、そのモジュールのグローバルスコップの副作用(`ctypes.CDLL`によるライブラリロード)まで引き継いでしまう。値だけが必要な場合は、重い依存を持つモジュールから独立した定数モジュールに複製する、という選択肢が有効。

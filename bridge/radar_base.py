@@ -1,14 +1,14 @@
-"""real_radar_base — 実機libspikehatのradar_base(旋回モーター)を使う実装。
+"""radar_base — sonar_radar::unit::radar_base に相当する、実機/SIM共通のユニット実装。
 
-Build HATは複数の同時オープンをサポートしないため、spikehat.SpikeHat()の
-構築はreal_hat.create_real_hat()に一本化し、real_starter.RealStarterと
-共有する(呼び出し側がhatを1つだけ作って両方に渡す)。
+クラス図の設計意図通り、実機とSIMで別クラスに分けず単一のクラスを共有する。
+実機/SIMの違いは、コンストラクタで渡すhatオブジェクト(実機はreal_hat.create_real_hat()
+が返すspikehat.SpikeHat、SIMはlibspikehat_hako.HakoSpikeHat)の実装差だけに
+閉じ込める(scanner.pyと同じ設計、device_types.py参照)。
 
 キャリブレーション(機械的0位置への復帰 → SENSOR_HOME_OFFSET分の補正)は
 sonar_radar/raspi/sonar_radar.py の CALIB_TO_ZERO/CALIB_TO_OFFSET(_drive_to)
 と同じ2段階・同じ許容誤差(3度)・同じgear比/オフセット換算・同じ
-「毎tick motor_pwm()で現在位置との誤差を補正し続ける」閉ループ制御で行う
-(hako_radar_base.pyのis_calibrated()とも同じ設計)。
+「毎tick motor_pwm()で現在位置との誤差を補正し続ける」閉ループ制御で行う。
 
 【2026-08-03の教訓】当初はspikehatのmotor_run_to_position()
 (非同期・fire-and-forgetでBuildHAT側がランプ移動を行う一発コマンド)を
@@ -17,9 +17,8 @@ sonar_radar/raspi/sonar_radar.py の CALIB_TO_ZERO/CALIB_TO_OFFSET(_drive_to)
 しまうと、ソフトウェア側は指令をやり直さずmotor_get_position()を
 ポーリングし続けるだけなので、位置が目標の数度手前で永久に止まって
 しまう(is_calibrated()が真になるまで進めなくなる)不具合があった。
-実機で発生したこの不具合を、標準版(sonar_radar.py)・SIM版
-(hako_radar_base.py)と比較して切り分け、標準版・SIM版と同じ閉ループ制御
-に統一することで解消した。
+実機で発生したこの不具合を、標準版(sonar_radar.py)・SIM版と比較して
+切り分け、標準版・SIM版と同じ閉ループ制御に統一することで解消した。
 
 run()/stop()/invert_direction()による継続旋回は、sonar_radar.py の
 _tick_scanning() と同じ設計(PWM一定駆動、マーカー検出時に符号反転のみ、
@@ -28,16 +27,18 @@ _tick_scanning() と同じ設計(PWM一定駆動、マーカー検出時に符�
 
 from __future__ import annotations
 
+from device_types import DEVICE_MOTOR_L
+
 _TOLERANCE_DEG = 3  # sonar_radar.py の _drive_to と同じ許容誤差
 _ALIGN_PWM_SCALE = 0.3  # sonar_radar.py の _drive_to と同じ換算
 _SCAN_PWM = 0.1  # sonar_radar.py の SCAN_PWM と同じ値
 
 
-class RealRadarBase:
-    """実機のradar_base(旋回モーター)を使う。sonar_radar::unit::radar_baseに相当。
+class RadarBase:
+    """radar_base(旋回モーター)を使う。sonar_radar::unit::radar_baseに相当。実機/SIM共通実装。
 
-    hatはreal_hat.create_real_hat()で構築したspikehat.SpikeHat()を渡す
-    (real_starter.RealStarterと同じhatを共有する想定)。
+    hatは実機ならreal_hat.create_real_hat()、SIM(Hakoniwa plant経由)なら
+    libspikehat_hako.HakoSpikeHatのインスタンスを渡す。
     """
 
     def __init__(
@@ -48,21 +49,18 @@ class RealRadarBase:
         gear_ratio: int = 3,
         sensor_home_offset_deg: int = 5,
     ) -> None:
-        import spikehat  # real_hat.create_real_hat()でパス解決済みの前提
-
         self._port = port
-        self._align_speed = align_speed
+        self._hat = hat
+        self._hat.port_config(self._port, DEVICE_MOTOR_L)
         # dome_to_motor(sensor_home_offset_deg) と同じ換算(sonar_radar.py参照)
         self._offset_deg = round(-sensor_home_offset_deg * gear_ratio)
         self._gear_ratio = gear_ratio
-        self._hat = hat
-        self._hat.port_config(self._port, spikehat.DEVICE_MOTOR_L)
         self._stage: str | None = None  # None→未開始, "to_zero", "to_offset", "done"
         self.zero_pos = 0
         self._align_pwm = (abs(align_speed) / 100.0) * _ALIGN_PWM_SCALE
         self._pwm = _SCAN_PWM
         self._running = False
-        print(f"[real_radar_base] 実機のradar_base(motor, port={self._port})を初期化しました")
+        print(f"[radar_base] radar_base(motor, port={self._port})を初期化しました")
 
     def calibrate(self) -> None:
         """機械的0位置への移動を開始する(entry相当、1回だけ呼ぶ想定)。"""
