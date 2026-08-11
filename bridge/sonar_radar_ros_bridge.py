@@ -131,10 +131,22 @@ def main() -> int:
         f"[ros_bridge] config={args.config} scan_batch_size={args.scan_batch_size}",
         file=sys.stderr,
     )
+    # ACCUMULATING_SCAN/FLUSHING_SCANはentry実行後すぐRUNNINGへ戻る
+    # 無条件遷移(状態機械図通り)のため、1件のscanを処理するのに2回の
+    # run()呼び出しを要する。毎tickでtick_interval分スリープすると、
+    # 処理能力が到着頻度(実機+SIM合計で最大40件/秒程度)に追いつかず、
+    # 内部キューに遅延が蓄積し続ける(2026-08-12、ブラウザ表示の遅延として
+    # 実地で発覚)。状態が変化した(=何か処理した)tickではスリープせず、
+    # 状態が変化しなかった(=処理すべきものが無かった)tickでのみ
+    # tick_interval分待つことで、滞留分を即座に掃き出しつつアイドル時の
+    # CPU busy-loopも避ける。
     try:
+        last_state = bridge.state
         while True:
             bridge.run()
-            time.sleep(args.tick_interval)
+            if bridge.state == last_state:
+                time.sleep(args.tick_interval)
+            last_state = bridge.state
     except KeyboardInterrupt:
         pass
     finally:
