@@ -5,6 +5,11 @@
       "pdu_key": { "robot_name": "Radar", "pdu_name": "scan_batch" },
       "topic": "/sonar_radar/scan_batch",
       "direction": "pdu_to_ros"
+    },
+    {
+      "pdu_key": { "robot_name": "Radar", "pdu_name": "state" },
+      "topic": "/sonar_radar/state",
+      "direction": "pdu_to_ros"
     }
   ]
 }

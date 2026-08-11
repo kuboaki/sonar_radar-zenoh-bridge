@@ -12,6 +12,13 @@ Zenohの受信コールバックは内部スレッドから非同期に呼ばれ
 queueに積むだけにし、matplotlib側(メインスレッド)のFuncAnimationで
 定期的に取り出して描画する。
 
+壁を動かした後の測定は前回までの測定と混ぜて見ても意味が無いため、
+stateチャンネル(origin別の状態遷移通知)を購読し、そのoriginが
+CALIBRATING(各デモ実行の最初に必ず1回だけ発生する、新しい実行の
+始まりを表す状態)になったら、そのoriginの蓄積済みプロットを消去する
+(SCANNINGはマーカー検出→反転のたびに複数回発生するため、消去の
+トリガーには使えない)。
+
 使い方:
   python3 bridge/plot_scan.py [--config path/to/endpoint_zenoh.json] [--max-points N]
 
@@ -31,6 +38,7 @@ import sys
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 
+from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_String import pdu_to_py_String
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +64,7 @@ def main() -> int:
     endpoint.post_start()
 
     _q: "queue.Queue[tuple[int, float, int]]" = queue.Queue()
+    _clear_q: "queue.Queue[int]" = queue.Queue()
 
     def _on_scan(_key, payload: bytes) -> None:
         try:
@@ -65,6 +74,20 @@ def main() -> int:
         _q.put((origin, dome_angle, distance_mm))
 
     endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="scan"), _on_scan)
+
+    def _on_state(_key, payload: bytes) -> None:
+        try:
+            text = pdu_to_py_String(bytearray(payload)).data
+        except (ValueError, struct.error):
+            return
+        origin_str, _, state_name = text.partition(":")
+        if state_name == "CALIBRATING":
+            try:
+                _clear_q.put(int(origin_str))
+            except ValueError:
+                pass
+
+    endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="state"), _on_state)
 
     print(f"[plot_scan] 監視中... (config={args.config}) ウィンドウを閉じると終了します", file=sys.stderr)
 
@@ -81,6 +104,13 @@ def main() -> int:
     ax.set_title("sonar_radar scan (dome_angle / distance_mm)")
 
     def _update(_frame):
+        while True:
+            try:
+                clear_origin = _clear_q.get_nowait()
+            except queue.Empty:
+                break
+            series[clear_origin] = {"theta": [], "r": []}
+
         rmax_grew = False
         while True:
             try:

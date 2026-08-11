@@ -13,6 +13,10 @@
             {
               "name": "scan_batch",
               "notify_on_recv": true
+            },
+            {
+              "name": "state",
+              "notify_on_recv": true
             }
           ]
         }

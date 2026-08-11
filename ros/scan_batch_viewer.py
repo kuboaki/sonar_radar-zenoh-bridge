@@ -20,6 +20,11 @@ bridge/broker.pyがsensor_msgs/PointCloudのchannelsへ詰めるのは
 (-angle/gear_ratio、bridge/radar_base.pyのgear_ratio既定3と同じ式)は
 可視化側の責務としてここで行う。
 
+壁を動かした後の測定は前回までの測定と混ぜて見ても意味が無いため、
+/pdu/sonar_radar/state(config/raspi5/ros_bindings_scan_batch.jsonで
+pdu_to_ros中継、bridge/plot_scan.pyと同じ設計)を購読し、そのoriginが
+CALIBRATINGになったら、そのoriginの蓄積済みプロットを消去する。
+
 このモジュールはrclpy/sensor_msgsに依存する。bridge/broker.pyが明言する
 「Zenoh専用・rclpy非依存」という不変条件を壊さないよう、bridge/ではなく
 ros/ に置く。
@@ -46,6 +51,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import rclpy  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from sensor_msgs.msg import PointCloud  # noqa: E402
+from std_msgs.msg import String  # noqa: E402
 
 _COLORS = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
 _ABS_MAX_DISTANCE_MM = 5000  # 異常値のクリップ上限(bridge/plot_scan.pyと同じ)
@@ -54,10 +60,18 @@ _RMAX_MARGIN = 1.2
 
 
 class _ScanBatchListener(Node):
-    def __init__(self, topic: str, out_queue: "queue.Queue[tuple[int, float, float]]") -> None:
+    def __init__(
+        self,
+        topic: str,
+        state_topic: str,
+        out_queue: "queue.Queue[tuple[int, float, float]]",
+        clear_queue: "queue.Queue[int]",
+    ) -> None:
         super().__init__("scan_batch_viewer")
         self._q = out_queue
+        self._clear_q = clear_queue
         self.create_subscription(PointCloud, topic, self._on_scan_batch, 10)
+        self.create_subscription(String, state_topic, self._on_state, 10)
 
     def _on_scan_batch(self, msg: PointCloud) -> None:
         channels = {c.name: c.values for c in msg.channels}
@@ -67,6 +81,14 @@ class _ScanBatchListener(Node):
         n = min(len(angles), len(distances), len(origins))
         for i in range(n):
             self._q.put((int(round(origins[i])), float(angles[i]), float(distances[i])))
+
+    def _on_state(self, msg: String) -> None:
+        origin_str, _, state_name = msg.data.partition(":")
+        if state_name == "CALIBRATING":
+            try:
+                self._clear_q.put(int(origin_str))
+            except ValueError:
+                pass
 
 
 def main() -> int:
@@ -86,6 +108,11 @@ def main() -> int:
         help="bridge/radar_base.pyのgear_ratio(既定3)と合わせること。"
         "angle(モーター生角度)からdome_angle相当への変換に使う",
     )
+    parser.add_argument(
+        "--state-topic", default="/pdu/sonar_radar/state",
+        help="--topicと同じ理由でconfig/raspi5/ros_bindings_scan_batch.jsonの"
+        "topic指定に関わらず実際は/pdu配下になる",
+    )
     args, ros_args = parser.parse_known_args()
 
     matplotlib.rcParams["webagg.address"] = args.host
@@ -94,7 +121,8 @@ def main() -> int:
 
     rclpy.init(args=ros_args)
     q: "queue.Queue[tuple[int, float, float]]" = queue.Queue()
-    node = _ScanBatchListener(args.topic, q)
+    clear_q: "queue.Queue[int]" = queue.Queue()
+    node = _ScanBatchListener(args.topic, args.state_topic, q, clear_q)
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
@@ -110,6 +138,13 @@ def main() -> int:
     ax.set_title(f"sonar_radar scan_batch ({args.topic})")
 
     def _update(_frame):
+        while True:
+            try:
+                clear_origin = clear_q.get_nowait()
+            except queue.Empty:
+                break
+            series[clear_origin] = {"theta": [], "r": []}
+
         rmax_grew = False
         while True:
             try:
