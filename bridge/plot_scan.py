@@ -55,7 +55,14 @@ _COLORS = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
 def main() -> int:
     parser = argparse.ArgumentParser(description="scanチャンネルをリアルタイムに極座標プロットする")
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
-    parser.add_argument("--max-points", type=int, default=200, help="origin毎に保持する最新点数")
+    parser.add_argument(
+        "--max-points", type=int, default=20000,
+        help="origin毎に保持する最新点数の安全上限(既定20000)。1回のスキャン"
+        "セッション全体(スタート〜次のCALIBRATINGでの消去まで)を表示したい"
+        "という運用方針のため、通常の使用でこの上限に達することは想定して"
+        "いない(達すると古い点から捨てられる、無制限のメモリ増加を防ぐ"
+        "安全弁)",
+    )
     args = parser.parse_args()
 
     endpoint = Endpoint("sonar_radar_zenoh_bridge_plot_scan", "inout")

@@ -102,7 +102,12 @@ def main() -> int:
     )
     parser.add_argument("--host", default="0.0.0.0", help="WebAggサーバーのbindアドレス")
     parser.add_argument("--port", type=int, default=8988)
-    parser.add_argument("--max-points", type=int, default=200, help="origin毎に保持する最新点数")
+    parser.add_argument(
+        "--max-points", type=int, default=20000,
+        help="origin毎に保持する最新点数の安全上限(既定20000、bridge/plot_scan.py"
+        "と同じ考え方)。1回のスキャンセッション全体を表示する運用方針のため、"
+        "通常の使用でこの上限に達することは想定していない",
+    )
     parser.add_argument(
         "--gear-ratio", type=float, default=3.0,
         help="bridge/radar_base.pyのgear_ratio(既定3)と合わせること。"
