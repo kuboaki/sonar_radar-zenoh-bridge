@@ -75,6 +75,7 @@ def main() -> int:
     fig = plt.figure()
     ax = fig.add_subplot(projection="polar")
     ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)  # 上から見て時計回り(コンパス表示と同じ向き)。既定は反時計回りで左右反転して見える
     rmax_state = {"value": _INITIAL_RMAX_MM}
     ax.set_rmax(rmax_state["value"])
     ax.set_title("sonar_radar scan (dome_angle / distance_mm)")
