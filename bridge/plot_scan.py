@@ -37,6 +37,7 @@ import sys
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+import numpy as np
 
 from hakoniwa_pdu.pdu_msgs.std_msgs.pdu_conv_String import pdu_to_py_String
 from hakoniwa_pdu_endpoint.c_endpoint import Endpoint, PduKey
@@ -144,7 +145,11 @@ def main() -> int:
                 color = _COLORS[i % len(_COLORS)]
                 scatters[origin] = ax.scatter([], [], s=8, color=color, label=f"origin={origin}")
                 ax.legend(loc="upper right")
-            scatters[origin].set_offsets(list(zip(s["theta"], s["r"])))
+            # set_offsets([])は「1次元配列」扱いになりIndexErrorでcrashする
+            # (matplotlibはoffsetsに(N,2)形状のndarrayを期待するため)。
+            # 空(クリア直後等)は明示的に(0,2)形状にする。
+            offsets = np.column_stack([s["theta"], s["r"]]) if s["theta"] else np.empty((0, 2))
+            scatters[origin].set_offsets(offsets)
             artists.append(scatters[origin])
         return artists
 

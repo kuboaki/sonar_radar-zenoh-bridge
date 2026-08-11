@@ -48,6 +48,7 @@ matplotlib.use("WebAgg")
 
 import matplotlib.animation as animation  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from sensor_msgs.msg import PointCloud  # noqa: E402
@@ -177,7 +178,11 @@ def main() -> int:
                 color = _COLORS[i % len(_COLORS)]
                 scatters[origin] = ax.scatter([], [], s=8, color=color, label=f"origin={origin}")
                 ax.legend(loc="upper right")
-            scatters[origin].set_offsets(list(zip(s["theta"], s["r"])))
+            # set_offsets([])は「1次元配列」扱いになりIndexErrorでcrashする
+            # (matplotlibはoffsetsに(N,2)形状のndarrayを期待するため)。
+            # 空(クリア直後等)は明示的に(0,2)形状にする。
+            offsets = np.column_stack([s["theta"], s["r"]]) if s["theta"] else np.empty((0, 2))
+            scatters[origin].set_offsets(offsets)
             artists.append(scatters[origin])
         return artists
 
