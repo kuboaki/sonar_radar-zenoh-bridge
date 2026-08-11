@@ -19,6 +19,7 @@ radar_base/starterは既定ではスタブ(即完了/擬似スイッチ)。
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -52,6 +53,14 @@ class _FakeStarter:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="実機での動作確認スクリプト")
+    parser.add_argument(
+        "--params-json", default=None,
+        help="各種パラメータ(タイムアウト値等)をまとめて指定するJSONファイルのパス。"
+        "キー名はこのスクリプトの引数名からダッシュをアンダースコアに置き換えたもの"
+        "(例: {\"scanning_timeout\": 10.0, \"calibration_timeout\": 20.0})。"
+        "JSON側の値はコマンドライン未指定時のデフォルト値として使われるだけなので、"
+        "同じ引数を--scanning-timeoutのようにコマンドラインでも指定すればそちらが優先される",
+    )
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
@@ -84,8 +93,8 @@ def main() -> int:
         "entryで行われるため、初期化中もstart/stop/detected等の受信は取りこぼさない)",
     )
     parser.add_argument(
-        "--scanning-timeout", type=float, default=8.0,
-        help="SCANNINGのタイムアウト秒数(既定8秒)。ドームが旋回しすぎてセンサー"
+        "--scanning-timeout", type=float, default=10.0,
+        help="SCANNINGのタイムアウト秒数(既定10秒)。ドームが旋回しすぎてセンサー"
         "ケーブルを巻き込む前に止めるための早期カットオフ(実機実測+ブリッジ"
         "経由のオーバーヘッド込み、docs/zenoh_state_machine_design.md参照)。"
         "ケーブル巻き込みリスクは実機のみの制約のため、シム側より小さめの既定値",
@@ -104,6 +113,16 @@ def main() -> int:
         help="WAIT_FOR_SCAN_START/MARKER_DETECTED/WAIT_FOR_STOP_RELEASE共通の"
         "タイムアウト秒数(既定2秒)。自分のpublishがループバックしてくるのを待つ",
     )
+    # --params-jsonだけを先に取り出し、JSON側の値をこのparserの既定値として
+    # 上書きしてから本パースする。これにより「コマンドライン引数を明示指定
+    # すればそちらが優先、未指定ならJSON値、JSONも無ければ元のデフォルト値」
+    # という優先順位が、argparse標準の仕組みだけで実現できる。
+    prelim_args, _ = parser.parse_known_args()
+    if prelim_args.params_json:
+        with open(prelim_args.params_json) as f:
+            json_params = json.load(f)
+        parser.set_defaults(**json_params)
+
     args = parser.parse_args()
 
     # ハードウェア初期化(特にBuild HATのファームウェアロード、数十秒かかる

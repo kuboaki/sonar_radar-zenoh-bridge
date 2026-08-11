@@ -1,7 +1,9 @@
 """real_marker_detector — 実機libspikehatのmarker_detector(色センサー)を使う実装。
 
-sonar_radar/raspi/sonar_radar.py の _tick_scanning() 内の色判定
-(is_red()/is_blue()、しきい値含む)をそのまま移植する。
+元々はsonar_radar/raspi/sonar_radar.py の _tick_scanning() 内の色判定
+(is_red()/is_blue())をそのまま移植していたが、赤は実機実測(2026-08-11)で
+チャタリング・誤検出が確認されたため緑に変更した(このファイルのみ先行
+対応、sonar_radar.py本体側の追従は別途)。
 
 is_detected() は「立ち上がりエッジ」(前回tickではマーカー上になかったが
 今回tickでマーカー上にある)でのみ True を返す。マーカーに乗ったまま
@@ -13,19 +15,27 @@ SCANNING→WAIT_FOR_INVERT→SCANNINGと1tickで往復しても、同じマー�
 
 from __future__ import annotations
 
-# sonar_radar.py と同じしきい値
-_RED_SAT_MIN = 40
-_RED_VAL_MIN = 40
+# 実機実測(2026-08-11)に基づくしきい値。赤は色相0/360度の境界に近く、
+# センサーノイズでhueが339〜342付近を行き来しチャタリング(短時間の連続
+# 反転)が起きたため緑に変更した。加えて赤のしきい値は彩度・明度の条件が
+# 緩く、機体周辺の茶色パーツ(hue=348〜353、赤の判定条件を満たしてしまう)
+# を誤検出するリスクがあったことも実測で確認済み。
+# 緑の実測値はhue158〜170で安定。周辺の既知の色(水色hue198〜204、
+# 紫hue234〜240、青hue210〜270)から離れているため誤検出リスクは低い。
+_GREEN_HUE_LO = 145
+_GREEN_HUE_HI = 185
+_GREEN_SAT_MIN = 150
+_GREEN_VAL_MIN = 50
 _BLUE_HUE_LO = 210
 _BLUE_HUE_HI = 270
 _BLUE_SAT_MIN = 580
 _BLUE_VAL_MIN = 100
 
 
-def _is_red(hue: float, sat: float, val: float) -> bool:
-    if sat < _RED_SAT_MIN or val < _RED_VAL_MIN:
+def _is_green(hue: float, sat: float, val: float) -> bool:
+    if sat < _GREEN_SAT_MIN or val < _GREEN_VAL_MIN:
         return False
-    return hue >= 340 or hue <= 20
+    return _GREEN_HUE_LO <= hue <= _GREEN_HUE_HI
 
 
 def _is_blue(hue: float, sat: float, val: float) -> bool:
@@ -56,7 +66,7 @@ class RealMarkerDetector:
             h, s, v = self._hat.color_read_hsv(self._port)
         except RuntimeError:
             return False
-        marker = _is_red(h, s, v) or _is_blue(h, s, v)
+        marker = _is_green(h, s, v) or _is_blue(h, s, v)
         detected = marker and not self._on_marker
         self._on_marker = marker
         return detected

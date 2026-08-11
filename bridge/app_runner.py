@@ -66,7 +66,7 @@ def run_app(
     tick_interval_sec: float,
     overall_timeout_sec: float,
     calibration_timeout_sec: float = 20.0,
-    scanning_timeout_sec: float = 8.0,
+    scanning_timeout_sec: float = 10.0,
     scan_grace_timeout_sec: float = 15.0,
     publish_confirm_timeout_sec: float = 2.0,
     hardware_initialize: Optional[Callable[[], None]] = None,

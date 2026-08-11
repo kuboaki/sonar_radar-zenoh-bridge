@@ -65,17 +65,13 @@ MARKER_DETECTED/WAIT_FOR_STOP_RELEASEに共通の「自分のpublishが
 
 SCANNING --[timer_is_fired()][!is_leader]--> WAIT_FOR_DETECTED_GRACE、
 SCANNING --[timer_is_fired()][is_leader]--> SCAN_FAILED (scanning_timeout_sec、
-既定8秒、以下T1)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
+既定10秒、以下T1)は、CALIBRATINGのタイムアウトとは目的が逆であることに注意。
 CALIBRATINGの20秒は「機構のずれを実機で外してはめ直す猶予」だが、
 SCANNINGのタイムアウトは「ドームが旋回しすぎてセンサーケーブルを
-巻き込む前に止める」ための早期カットオフ。基準値は実機実測(マーカー間
-1レッグの所要時間、複数回計測で最大約5.3秒。シム側も実時間設計により
-同程度)に、ブリッジ経由のオーバーヘッド(Zenoh送受信・tickループ等、
-実測+1〜1.5秒程度)を加味したもの(2026-07-29/08-02計測、
-docs/development_log.md参照)。ケーブル巻き込みリスクは実機だけの制約
-でシムには無いため、既定値はrun_real.py/run_hako.pyそれぞれの
---scanning-timeoutで実機は8秒・シムは12秒に分けている(このクラス
-自体の既定値8秒は安全側=実機に合わせたもの)。entryでtimer_start
+巻き込む前に止める」ための早期カットオフ。既定値は当初8秒だったが、
+実機実測(2026-08-11、タイムスタンプ付きログで計測)で1レッグの所要時間が
+平均7.83秒・最大8.71秒と、8秒に対してほぼ余裕が無いことが判明したため
+10秒に引き上げた(詳細はdocs/development_log.md参照)。entryでtimer_start
 (scanning_timeout_sec)、exitでtimer_stop()を行う(WAIT_FOR_INVERTからの
 再入時も含め、SCANNINGに入るたび1レッグ分としてタイマーを取り直す)。
 
@@ -157,7 +153,7 @@ class SonarRadarApp:
         radar_base_get_dome_angle: Optional[Callable[[], float]] = None,
         scanner_get_distance: Optional[Callable[[], int]] = None,
         calibration_timeout_sec: float = 20.0,
-        scanning_timeout_sec: float = 8.0,
+        scanning_timeout_sec: float = 10.0,
         scan_grace_timeout_sec: float = 15.0,
         publish_confirm_timeout_sec: float = 2.0,
     ) -> None:

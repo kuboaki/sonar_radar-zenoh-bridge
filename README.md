@@ -226,6 +226,16 @@ python3 -c "from hakoniwa_pdu_endpoint import c_endpoint; print('import ok')"
 
    実機のハードウェアを使う場合は`--real-radar-base`（旋回モーター）・`--real-starter`（フォースセンサー）を付ける（Raspberry Pi上でのみ動作。Build HATは同時オープンをサポートしないため、両方を同時に指定した場合は`real_hat.py`が構築する単一の接続を共有する）。
 
+   タイムアウト値等のパラメータが増えてきたため、`--params-json path/to/params.json`でまとめて指定できる。JSON側の値はコマンドライン未指定時の既定値として使われるだけなので、同じ引数をコマンドラインでも指定すればそちらが優先される（`run_real.py`/`run_hako.py`共通）。
+
+   ```json
+   {"scanning_timeout": 10.0, "calibration_timeout": 20.0, "scan_grace_timeout": 15.0}
+   ```
+
+   ```bash
+   python3 run_real.py --leader --params-json params.json --timeout 15
+   ```
+
 ### `bridge/` をMuJoCoシミュレータ(Hakoniwa plant)経由で動かす
 
 **前提**: `hakoniwa-mujoco-robots`側の環境構築（`.python-version`をHomebrewの`python@3.14`に合わせ、`uv sync`で`.venv`を作る。`mujoco`だけでなく`bridge/`が使う`cffi`も必要）が済んでいること。詳細は`hakoniwa-mujoco-robots`リポジトリを参照。

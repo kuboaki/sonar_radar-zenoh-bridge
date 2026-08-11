@@ -29,6 +29,7 @@ SCANNINGへ進む設計のため、これが最も典型的な使い方)。--hak
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -74,6 +75,14 @@ _DUMMY_DISTANCE_MM = 500
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hakoniwa plant経由の動作確認スクリプト")
+    parser.add_argument(
+        "--params-json", default=None,
+        help="各種パラメータ(タイムアウト値等)をまとめて指定するJSONファイルのパス。"
+        "キー名はこのスクリプトの引数名からダッシュをアンダースコアに置き換えたもの"
+        "(例: {\"scanning_timeout\": 10.0, \"calibration_timeout\": 20.0})。"
+        "JSON側の値はコマンドライン未指定時のデフォルト値として使われるだけなので、"
+        "同じ引数を--scanning-timeoutのようにコマンドラインでも指定すればそちらが優先される",
+    )
     parser.add_argument("--config", default=_DEFAULT_CONFIG, help="endpoint_zenoh.json のパス")
     parser.add_argument("--origin", type=int, default=1, help="自分のorigin識別子")
     parser.add_argument("--leader", action="store_true", help="is_leader=True にする")
@@ -94,8 +103,8 @@ def main() -> None:
         help="CALIBRATING(ローカルなハードウェアキャリブレーション)のタイムアウト秒数(既定20秒)",
     )
     parser.add_argument(
-        "--scanning-timeout", type=float, default=8.0,
-        help="SCANNINGのタイムアウト秒数(既定8秒、run_real.pyと同値)。ドームが"
+        "--scanning-timeout", type=float, default=10.0,
+        help="SCANNINGのタイムアウト秒数(既定10秒、run_real.pyと同値)。ドームが"
         "旋回しすぎてセンサーケーブルを巻き込む前に止める早期カットオフ。"
         "2026-08-05にWAIT_FOR_DETECTED_GRACE(--scan-grace-timeout)を導入した"
         "ため、以前あった「followerはleaderより短くしてはならない」という制約は"
@@ -116,6 +125,15 @@ def main() -> None:
         help="WAIT_FOR_SCAN_START/MARKER_DETECTED/WAIT_FOR_STOP_RELEASE共通の"
         "タイムアウト秒数(既定2秒)。自分のpublishがループバックしてくるのを待つ",
     )
+    # --params-jsonだけを先に取り出し、JSON側の値をこのparserの既定値として
+    # 上書きしてから本パースする(run_real.pyと同じ優先順位: CLI明示指定 >
+    # JSON値 > 元のデフォルト値)。
+    prelim_args, _ = parser.parse_known_args()
+    if prelim_args.params_json:
+        with open(prelim_args.params_json) as f:
+            json_params = json.load(f)
+        parser.set_defaults(**json_params)
+
     args = parser.parse_args()
 
     if not os.path.exists(PDU_DEF_PATH):
