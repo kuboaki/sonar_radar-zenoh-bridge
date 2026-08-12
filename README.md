@@ -314,6 +314,8 @@ python3 plot_scan.py --config ../config/mac/endpoint_zenoh.json   # Macの場合
 
 `plot_scan.py`は`state`チャンネルも監視しており、そのoriginがCALIBRATING(各デモ実行の最初に必ず1回だけ発生)になると、蓄積済みプロットをそのoriginだけ消去する(壁を動かした後の測定を前回までと混ぜて見ないため)。`--max-points`(既定20000、origin毎)は通常の1スキャンセッションでは到達しない安全上限で、無制限のメモリ増加を防ぐためだけのもの。
 
+このCALIBRATING連動の自動消去とは別に、**プロットウィンドウをクリックしてアクティブにした状態で`x`キーを押すと、スキャンの状態に関わらずいつでも全origin分を手動消去できる**(`x`はmatplotlibの既定キーマップと衝突しないことを確認済み)。
+
 ### scan_batchのROS経由可視化(`ros/scan_batch_viewer.py`)
 
 実機(Pi4)とSIM(Mac)、2台分のスキャンをROS経由でブラウザに重畳表示する(`pdu_ros_bridge::sonar_radar_ros_bridge`設計の実装)。Pi5で以下3つをそれぞれ別ターミナルで起動する。
@@ -325,7 +327,7 @@ bash config/raspi5/run_sonar_radar_ros_bridge.bash      # scan集約・scan_batc
 bash config/raspi5/run_scan_batch_viewer.bash           # rclpy + matplotlib WebAgg
 ```
 
-起動後、同じLAN上の任意のブラウザで`http://<Pi5のIP>:8988/`を開く。`plot_scan.py`と同じく、originがCALIBRATINGになると該当originのプロットを消去する(ROS版は`/pdu/sonar_radar/state`トピックを購読)。
+起動後、同じLAN上の任意のブラウザで`http://<Pi5のIP>:8988/`を開く。`plot_scan.py`と同じく、originがCALIBRATINGになると該当originのプロットを消去する(ROS版は`/pdu/sonar_radar/state`トピックを購読)。ブラウザ側のプロット領域をクリックしてアクティブにした状態で`x`キーを押せば、`plot_scan.py`と同じく全origin分を手動消去できる(WebAggはブラウザからのキー入力をサーバー側へ転送する標準機構を持つため、追加設定なしに動作する)。
 
 **注意点**:
 - `hakoniwa_pdu_ros`はROSトピック名を`direction: "pdu_to_ros"`のbindingでは常に`/pdu`名前空間の下へマッピングする(bindingの`topic`指定に関わらず、実際は`/pdu/sonar_radar/scan_batch`等になる)。
