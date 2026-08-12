@@ -19,6 +19,11 @@ CALIBRATING(各デモ実行の最初に必ず1回だけ発生する、新しい�
 (SCANNINGはマーカー検出→反転のたびに複数回発生するため、消去の
 トリガーには使えない)。
 
+スキャンの状態遷移とは独立に、手動で全消去したい場合のために
+キーボードショートカット(xキー)も用意する。プロットウィンドウを
+クリックしてアクティブにしてから押すこと。`x`はmatplotlibの既定
+キーマップ(`c`=戻る等)と衝突しないことを確認済み。
+
 使い方:
   python3 bridge/plot_scan.py [--config path/to/endpoint_zenoh.json] [--max-points N]
 
@@ -97,7 +102,11 @@ def main() -> int:
 
     endpoint.subscribe_on_recv_callback_by_name(PduKey(robot=_ROBOT, pdu="state"), _on_state)
 
-    print(f"[plot_scan] 監視中... (config={args.config}) ウィンドウを閉じると終了します", file=sys.stderr)
+    print(
+        f"[plot_scan] 監視中... (config={args.config}) ウィンドウを閉じると終了します"
+        "(ウィンドウをアクティブにしてxキーで全消去)",
+        file=sys.stderr,
+    )
 
     # origin毎の点列(角度[rad]・距離[mm])を保持
     series: dict[int, dict[str, list[float]]] = {}
@@ -110,6 +119,14 @@ def main() -> int:
     rmax_state = {"value": _INITIAL_RMAX_MM}
     ax.set_rmax(rmax_state["value"])
     ax.set_title("sonar_radar scan (dome_angle / distance_mm)")
+
+    def _on_key(event) -> None:
+        if event.key == "x":
+            for origin in series:
+                series[origin] = {"theta": [], "r": []}
+            print("[plot_scan] xキー: 全origin分のプロットを消去しました", file=sys.stderr)
+
+    fig.canvas.mpl_connect("key_press_event", _on_key)
 
     def _update(_frame):
         while True:

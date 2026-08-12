@@ -25,6 +25,12 @@ bridge/broker.pyがsensor_msgs/PointCloudのchannelsへ詰めるのは
 pdu_to_ros中継、bridge/plot_scan.pyと同じ設計)を購読し、そのoriginが
 CALIBRATINGになったら、そのoriginの蓄積済みプロットを消去する。
 
+スキャンの状態遷移とは独立に、手動で全消去したい場合のために
+キーボードショートカット(xキー)も用意する(bridge/plot_scan.pyと同じ)。
+WebAggはブラウザからのキー入力をサーバー側へ転送する仕組みを標準で
+持っているため、ブラウザでプロット領域をクリックしてアクティブにして
+から押せば動作する。
+
 このモジュールはrclpy/sensor_msgsに依存する。bridge/broker.pyが明言する
 「Zenoh専用・rclpy非依存」という不変条件を壊さないよう、bridge/ではなく
 ros/ に置く。
@@ -143,6 +149,14 @@ def main() -> int:
     ax.set_rmax(rmax_state["value"])
     ax.set_title(f"sonar_radar scan_batch ({args.topic})")
 
+    def _on_key(event) -> None:
+        if event.key == "x":
+            for origin in series:
+                series[origin] = {"theta": [], "r": []}
+            print("[scan_batch_viewer] xキー: 全origin分のプロットを消去しました")
+
+    fig.canvas.mpl_connect("key_press_event", _on_key)
+
     def _update(_frame):
         while True:
             try:
@@ -190,7 +204,8 @@ def main() -> int:
 
     print(
         f"[scan_batch_viewer] 監視中... (topic={args.topic}) "
-        f"http://<このホストのIP>:{args.port}/ をブラウザで開いてください",
+        f"http://<このホストのIP>:{args.port}/ をブラウザで開いてください"
+        "(プロット領域をクリックしてアクティブにし、xキーで全消去)",
     )
     try:
         plt.show()
