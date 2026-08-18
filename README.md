@@ -6,6 +6,8 @@ sonar_radar 本体は「実機・スタンドアロンSIM・Hakoniwa SIM」と�
 
 > **設計の転回（2回）**: 当初は `sonar_radar` 本体に手を入れる形で実装していたが、実装・実機検証を通じて設計上の問題が判明し、**`sonar_radar` は完全に無改造のまま使わず、本リポジトリ側に独立した「Zenoh版 sonar_radar」ステートマシンを新設する**方針に転回した（1回目）。さらにその後、実機・シムの2台構成での動作検証を重ねる中で、キャリブレーション完了をマシン間で待ち合わせる設計自体が人の操作速度に依存して壊れやすいことが判明し、**マシン間のキャリブレーション協調を廃止し、各マシンがローカルで独立にキャリブレーションを完了させる**方針に再転回した（2回目）。経緯と現在の状態機械設計は [`docs/zenoh_state_machine_design.md`](docs/zenoh_state_machine_design.md) を参照。このREADMEの一部セクション（特に下記「【廃案】sonar_radar 本体側で必要な変更」）は転回前の内容のままなので、矛盾する記述は設計ドキュメント側を正とする。
 
+![実演の様子(RSOConJP2026): 実機・MuJoCoビューア・ターミナルログを並べて展示](docs/demo_rsoconjp2026.jpg)
+
 ## 背景
 
 Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単一ホスト内の複数アセットを密結合に同期させる仕組みで、今回のようにマシンをまたいだ「実機とシムがだいたい同じタイミングで動きつつ、イベント発生時だけ通信する」というユースケースには直接使えない。かわりに、各マシンが自律的にステートマシンの tick ループ（既存の「開いたループ」設計そのまま）を回しつつ、要所で Zenoh 経由の PDU を送受信することで疎結合な同期を実現する。
@@ -19,6 +21,8 @@ Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単
 | Raspberry Pi 5 | `hakoniwa-pdu-ros` bridge + pdu-endpoint (zenoh, client mode) | 実機・シム双方のPDUをROSトピックとして中継・モニタリング、外部コマンド注入点 |
 
 実機・シムはそれぞれ zenohd (Mac 上) へ `client` mode で接続する（`peer` mode ではなく、ルーター経由）。
+
+![実機(Raspberry Pi 4B+ + Build HAT + SPIKE Prime)の全体像](docs/real_machine.png)
 
 ## PDU トピック設計
 
