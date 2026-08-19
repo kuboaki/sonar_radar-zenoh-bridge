@@ -24,6 +24,8 @@ Hakoniwa のコンダクターによる時刻同期（`hakopy.usleep()`）は単
 
 ![実機(Raspberry Pi 4B+ + Build HAT + SPIKE Prime)の全体像](docs/real_machine.png)
 
+![MuJoCoビューアに表示されたsonar_radarモデル(SIM側)](docs/mujoco_viewer.png)
+
 ## PDU トピック設計
 
 `SonarRadarSM` の状態遷移イベントそのものを PDU 化する（低レベルI/O値のPDU化ではない）。実機・シムは対称に、自分のイベントを publish し、相手のイベントを subscribe する。
